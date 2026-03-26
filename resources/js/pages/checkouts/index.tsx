@@ -1,8 +1,6 @@
 import { Head, router, usePage } from '@inertiajs/react';
-import { useState, useEffect } from 'react';
 import { Wallet } from 'lucide-react';
-import AppLayout from '@/layouts/app-layout';
-import type { BreadcrumbItem } from '@/types';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -14,8 +12,9 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { dashboard } from '@/routes';
+import AppLayout from '@/layouts/app-layout';
 import receiptsRoutes from '@/routes/receipts';
+import type { BreadcrumbItem } from '@/types';
 
 type CheckoutRow = {
   id: number;
@@ -101,11 +100,15 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
   const pageErrors = (usePage().props as { errors?: Record<string, string> }).errors ?? {};
 
   useEffect(() => {
-    if (receiptProp) setInvoiceReceipt(receiptProp);
+    if (receiptProp) {
+setInvoiceReceipt(receiptProp);
+}
   }, [receiptProp]);
 
   useEffect(() => {
-    if (payModalOpen && pageErrors.payments) setPayError(pageErrors.payments);
+    if (payModalOpen && pageErrors.payments) {
+setPayError(pageErrors.payments);
+}
   }, [payModalOpen, pageErrors.payments]);
 
   const openPayModal = (id: number) => {
@@ -118,7 +121,10 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
     setPayModalOpen(true);
     fetch(`/checkouts/${id}/summary`)
       .then((res) => {
-        if (!res.ok) throw new Error('Could not load summary');
+        if (!res.ok) {
+throw new Error('Could not load summary');
+}
+
         return res.json();
       })
       .then((data: CheckoutSummary) => setSummary(data))
@@ -133,33 +139,56 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
   };
 
   const handlePayComplete = () => {
-    if (!summary || payCheckoutId == null) return;
+    if (!summary || payCheckoutId == null) {
+return;
+}
+
     const cashNum = parseFloat(cash) || 0;
     const cardNum = parseFloat(card) || 0;
     const transferNum = parseFloat(transfer) || 0;
     const totalPaid = Math.round((cashNum + cardNum + transferNum) * 100) / 100;
     const grandTotalCents = Math.round(summary.grand_total * 100);
     const totalPaidCents = Math.round(totalPaid * 100);
+
     if (totalPaidCents !== grandTotalCents) {
       setPayError(`Total paid must equal grand total (${money(summary.grand_total)}).`);
+
       return;
     }
+
     setPayError(null);
     const payments: { method: string; amount: number }[] = [];
-    if (cashNum > 0) payments.push({ method: 'cash', amount: cashNum });
-    if (cardNum > 0) payments.push({ method: 'card', amount: cardNum });
-    if (transferNum > 0) payments.push({ method: 'transfer_qr', amount: transferNum });
+
+    if (cashNum > 0) {
+payments.push({ method: 'cash', amount: cashNum });
+}
+
+    if (cardNum > 0) {
+payments.push({ method: 'card', amount: cardNum });
+}
+
+    if (transferNum > 0) {
+payments.push({ method: 'transfer_qr', amount: transferNum });
+}
+
     const payload: { payments: { method: string; amount: number }[]; customer_email?: string } = { payments };
-    if (customerEmail.trim()) payload.customer_email = customerEmail.trim();
+
+    if (customerEmail.trim()) {
+payload.customer_email = customerEmail.trim();
+}
+
     setSubmitting(true);
     router.post(`/checkouts/${payCheckoutId}/complete`, payload, {
       onSuccess: (visit: { page?: { props?: { errors?: Record<string, string> } } }) => {
         setSubmitting(false);
         const err = visit?.page?.props?.errors?.payments;
+
         if (err) {
           setPayError(err);
+
           return;
         }
+
         closePayModal();
       },
       onError: () => setSubmitting(false),
@@ -167,34 +196,14 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
     });
   };
 
-  const handleAddItem = (checkoutId: number) => {
-    if (products.length === 0) {
-      alert('No products available.');
-      return;
-    }
-    const productOptions = products.map((p, i) => `${i + 1}: ${p.name} (${p.price})`).join('\n');
-    const productInput = window.prompt(`Select product number:\n${productOptions}`);
-    if (!productInput) return;
-    const index = Number(productInput) - 1;
-    if (Number.isNaN(index) || index < 0 || index >= products.length) {
-      alert('Invalid product selection.');
-      return;
-    }
-    const quantityInput = window.prompt('Quantity:', '1');
-    if (!quantityInput) return;
-    const quantity = Number(quantityInput);
-    if (Number.isNaN(quantity) || quantity <= 0) {
-      alert('Invalid quantity.');
-      return;
-    }
-    const product = products[index];
-    router.post(`/checkouts/${checkoutId}/items`, { product_id: product.id, quantity });
-  };
-
   const handleEmailInvoice = async () => {
-    if (!invoiceReceipt) return;
+    if (!invoiceReceipt) {
+return;
+}
+
     setEmailMessage(null);
     setEmailSending(true);
+
     try {
       const url = receiptsRoutes.sendEmail.url({ receipt: invoiceReceipt.id });
       const csrfToken = document.cookie.split('; ').find((r) => r.startsWith('XSRF-TOKEN='))?.split('=')[1];
@@ -203,13 +212,20 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
         Accept: 'application/json',
         'Content-Type': 'application/json',
       };
-      if (csrfToken) headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
+
+      if (csrfToken) {
+headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
+}
+
       const res = await fetch(url, { method: 'POST', headers, body: '{}' });
       const data = await res.json().catch(() => ({}));
+
       if (!res.ok) {
         setEmailMessage(data.message || 'Failed to send email.');
+
         return;
       }
+
       setEmailMessage(data.message || 'Receipt sent.');
     } finally {
       setEmailSending(false);
@@ -225,14 +241,20 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
   const handleMergeTabs = () => {
     if (selectedIds.length < 2) {
       alert('Select at least two tabs to merge.');
+
       return;
     }
+
     const targetId = selectedIds[0];
     const sourceIds = selectedIds.slice(1);
     const ok = window.confirm(
       `Merge ${selectedIds.length} tabs into Tab #${targetId}? This cannot be undone.`,
     );
-    if (!ok) return;
+
+    if (!ok) {
+return;
+}
+
     router.post('/checkouts/merge', { target_id: targetId, source_ids: sourceIds }, {
       onSuccess: () => setSelectedIds([]),
     });
@@ -241,8 +263,10 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
   const openAddItemModal = (checkoutId: number) => {
     if (products.length === 0) {
       alert('No products available.');
+
       return;
     }
+
     setAddItemCheckoutId(checkoutId);
     setAddItemSearch('');
     setAddItemCategory('all');
@@ -252,9 +276,19 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
 
   const normalizeCategory = (raw: string | null | undefined): string => {
     const lower = (raw || '').toLowerCase();
-    if (lower === 'drink' || lower === 'drinks') return 'Drinks';
-    if (lower === 'snack' || lower === 'snacks') return 'Snacks';
-    if (lower === 'set' || lower === 'sets' || lower === 'combo' || lower === 'combos') return 'Sets';
+
+    if (lower === 'drink' || lower === 'drinks') {
+return 'Drinks';
+}
+
+    if (lower === 'snack' || lower === 'snacks') {
+return 'Snacks';
+}
+
+    if (lower === 'set' || lower === 'sets' || lower === 'combo' || lower === 'combos') {
+return 'Sets';
+}
+
     return raw && raw.trim() ? raw : 'Other';
   };
 
@@ -264,17 +298,20 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
     const cat = normalizeCategory(p.category);
     const matchesSearch = (p.name + ' ' + cat).toLowerCase().includes(addItemSearch.toLowerCase());
     const matchesCategory = addItemCategory === 'all' || cat === addItemCategory;
+
     return matchesSearch && matchesCategory;
   });
 
   const addProductToCart = (product: { id: number; name: string; price: string; category: string }) => {
     setAddItemCart((prev) => {
       const existing = prev.find((i) => i.productId === product.id);
+
       if (existing) {
         return prev.map((i) =>
           i.productId === product.id ? { ...i, quantity: i.quantity + 1 } : i,
         );
       }
+
       return [
         ...prev,
         {
@@ -299,7 +336,10 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
   const cartTotal = addItemCart.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
   const handleConfirmAddItem = () => {
-    if (!addItemCheckoutId || addItemCart.length === 0) return;
+    if (!addItemCheckoutId || addItemCart.length === 0) {
+return;
+}
+
     const items = addItemCart.map((item) => ({
       product_id: item.productId,
       quantity: item.quantity,
@@ -319,21 +359,16 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
       <div className="flex flex-1 flex-col gap-4 rounded-xl p-4">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold">Open tab</h1>
-          <div className="flex items-center gap-2">
-            {checkouts.length > 1 && (
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={selectedIds.length < 2}
-                onClick={handleMergeTabs}
-              >
-                Merge tabs
-              </Button>
-            )}
-            <Button variant="outline" asChild>
-              <a href={dashboard()}>Dashboard</a>
+          {checkouts.length > 1 && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={selectedIds.length < 2}
+              onClick={handleMergeTabs}
+            >
+              Merge tabs
             </Button>
-          </div>
+          )}
         </div>
 
         {checkouts.length === 0 ? (
@@ -387,7 +422,7 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
 
         {/* Add item modal for a checkout tab */}
         <Dialog open={addItemModalOpen} onOpenChange={(open) => !open && setAddItemModalOpen(false)}>
-          <DialogContent className="w-full sm:max-w-5xl">
+          <DialogContent className="w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-5xl">
             <DialogHeader>
               <DialogTitle>Add Items</DialogTitle>
               <DialogDescription>
@@ -396,7 +431,7 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
             </DialogHeader>
 
             {/* Shell */}
-            <div className="mt-2 rounded-xl border border-sidebar-border/70 bg-background/95 p-4 shadow-sm dark:border-sidebar-border">
+            <div className="mt-2 rounded-xl border border-sidebar-border/70 bg-background/95 p-3 shadow-sm dark:border-sidebar-border sm:p-4">
               {/* Global search */}
               <div className="mb-4">
                 <Input
@@ -408,13 +443,13 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
               </div>
 
               {/* 3-column content */}
-              <div className="flex h-[420px] gap-4">
+              <div className="flex flex-col gap-3 overflow-y-auto lg:h-[420px] lg:flex-row lg:gap-4 lg:overflow-hidden">
                 {/* Categories (left) */}
-                <div className="flex w-52 flex-shrink-0 flex-col">
+                <div className="flex w-full flex-shrink-0 flex-col lg:w-52">
                   <Label className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     Categories
                   </Label>
-                  <div className="flex-1 space-y-1 overflow-y-auto rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-2">
+                  <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-2 lg:max-h-none lg:flex-1">
                     <Button
                       type="button"
                       size="sm"
@@ -444,8 +479,8 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
                   <Label className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     Items
                   </Label>
-                  <div className="flex-1 overflow-hidden rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-3">
-                    <div className="grid grid-cols-2 gap-3 overflow-y-auto text-sm">
+                  <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-3">
+                    <div className="grid max-h-[34vh] grid-cols-1 gap-3 overflow-y-auto text-sm sm:grid-cols-2 lg:max-h-none lg:h-full">
                       {filteredProducts.length === 0 && (
                         <div className="col-span-2 px-2 py-1 text-muted-foreground">
                           No products match your search.
@@ -476,12 +511,12 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
                 </div>
 
                 {/* Cart (right) */}
-                <div className="flex w-64 flex-shrink-0 flex-col">
+                <div className="flex w-full flex-shrink-0 flex-col lg:w-64">
                   <Label className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     Cart
                   </Label>
-                  <div className="flex-1 overflow-hidden rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-3 text-sm">
-                    <div className="h-full space-y-2 overflow-y-auto">
+                  <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-3 text-sm">
+                    <div className="max-h-40 space-y-2 overflow-y-auto lg:max-h-none lg:h-full">
                       {addItemCart.length === 0 && (
                         <div className="px-2 py-1 text-sm italic text-muted-foreground">
                           Cart is empty.
@@ -515,7 +550,7 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
                     <span className="text-muted-foreground">Total:</span>
                     <span className="font-semibold">{money(cartTotal)}</span>
                   </div>
-                  <div className="mt-3 flex justify-end gap-2">
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
                     <Button variant="outline" type="button" onClick={() => setAddItemModalOpen(false)}>
                       Cancel
                     </Button>
@@ -530,7 +565,7 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
         </Dialog>
 
         <Dialog open={payModalOpen} onOpenChange={(open) => !open && closePayModal()}>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
             <DialogHeader>
               <DialogTitle>Pay tab — {summary?.table_name ?? 'Open tab'}</DialogTitle>
               <DialogDescription>
@@ -562,7 +597,9 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
                       min={0}
                       placeholder="0"
                       value={cash}
-                      onChange={(e) => { setCash(e.target.value); setPayError(null); }}
+                      onChange={(e) => {
+ setCash(e.target.value); setPayError(null); 
+}}
                     />
                   </div>
                   <div className="flex items-center gap-2">
@@ -573,7 +610,9 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
                       min={0}
                       placeholder="0"
                       value={card}
-                      onChange={(e) => { setCard(e.target.value); setPayError(null); }}
+                      onChange={(e) => {
+ setCard(e.target.value); setPayError(null); 
+}}
                     />
                   </div>
                   <div className="flex items-center gap-2">
@@ -584,7 +623,9 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
                       min={0}
                       placeholder="0"
                       value={transfer}
-                      onChange={(e) => { setTransfer(e.target.value); setPayError(null); }}
+                      onChange={(e) => {
+ setTransfer(e.target.value); setPayError(null); 
+}}
                     />
                   </div>
                   <div className="flex items-center gap-2">
@@ -596,6 +637,10 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
                       onChange={(e) => setCustomerEmail(e.target.value)}
                     />
                   </div>
+                </div>
+                <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-muted-foreground/40 bg-muted/30 p-6 text-center text-sm text-muted-foreground">
+                  <span className="font-medium">QR Code placeholder</span>
+                  <span className="text-xs">Scan to pay via transfer</span>
                 </div>
                 {payError && <p className="text-sm text-destructive">{payError}</p>}
                 <DialogFooter>
@@ -663,7 +708,9 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
                   <Button onClick={handleEmailInvoice} disabled={emailSending}>
                     {emailSending ? 'Sending…' : 'Email'}
                   </Button>
-                  <Button variant="secondary" onClick={() => { setInvoiceReceipt(null); setEmailMessage(null); }}>
+                  <Button variant="secondary" onClick={() => {
+ setInvoiceReceipt(null); setEmailMessage(null); 
+}}>
                     Close
                   </Button>
                 </DialogFooter>

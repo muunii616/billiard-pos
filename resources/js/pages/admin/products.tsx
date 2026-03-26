@@ -1,10 +1,7 @@
 import { Head, router, useForm } from '@inertiajs/react';
 import { useState } from 'react';
-import AppLayout from '@/layouts/app-layout';
-import type { BreadcrumbItem } from '@/types';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
@@ -13,6 +10,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import AppLayout from '@/layouts/app-layout';
+import type { BreadcrumbItem } from '@/types';
 
 type Product = {
   id: number;
@@ -42,9 +42,19 @@ export default function AdminProducts({ products }: Props) {
 
   const normalizeCategory = (raw: string): string => {
     const key = (raw || '').trim().toLowerCase();
-    if (key === 'drink' || key === 'drinks') return 'Drinks';
-    if (key === 'snack' || key === 'snacks') return 'Snacks';
-    if (key === 'set' || key === 'sets' || key === 'combo' || key === 'combos') return 'Sets';
+
+    if (key === 'drink' || key === 'drinks') {
+return 'Drinks';
+}
+
+    if (key === 'snack' || key === 'snacks') {
+return 'Snacks';
+}
+
+    if (key === 'set' || key === 'sets' || key === 'combo' || key === 'combos') {
+return 'Sets';
+}
+
     return 'Snacks';
   };
 
@@ -80,7 +90,10 @@ export default function AdminProducts({ products }: Props) {
   };
 
   const handleDelete = (product: Product) => {
-    if (!window.confirm(`Delete product "${product.name}"?`)) return;
+    if (!window.confirm(`Delete product "${product.name}"?`)) {
+return;
+}
+
     router.delete(`/admin/products/${product.id}`);
   };
 
@@ -100,7 +113,11 @@ export default function AdminProducts({ products }: Props) {
 
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (editingProductId == null) return;
+
+    if (editingProductId == null) {
+return;
+}
+
     putEdit(`/admin/products/${editingProductId}`, {
       onSuccess: () => closeEditModal(),
     });

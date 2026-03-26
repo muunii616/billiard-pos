@@ -1,10 +1,10 @@
 import { Head, router, useForm, usePage } from '@inertiajs/react';
-import AppLayout from '@/layouts/app-layout';
-import type { BreadcrumbItem } from '@/types';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
+import AppLayout from '@/layouts/app-layout';
+import type { BreadcrumbItem } from '@/types';
 
 type User = {
   id: number;
@@ -51,29 +51,49 @@ export default function AdminUsers({ users }: Props) {
 
   const handleEditRole = (user: User) => {
     const role = window.prompt('Role (admin or employee)', user.role) ?? user.role;
+
     if (!['admin', 'employee'].includes(role)) {
       alert('Role must be admin or employee.');
+
       return;
     }
+
     router.put(`/admin/users/${user.id}`, { role });
   };
 
   const handleEdit = (user: User) => {
     const name = window.prompt('Name', user.name);
-    if (name === null) return;
+
+    if (name === null) {
+return;
+}
+
     const email = window.prompt('Email', user.email);
-    if (email === null) return;
+
+    if (email === null) {
+return;
+}
+
     const phone = window.prompt('Phone', user.phone ?? '');
-    if (phone === null) return;
+
+    if (phone === null) {
+return;
+}
+
     router.put(`/admin/users/${user.id}`, { name, email, phone: phone || null });
   };
 
   const handleDelete = (user: User) => {
     if (user.id === currentUserId) {
       alert('You cannot delete your own account.');
+
       return;
     }
-    if (!window.confirm(`Delete user "${user.name}"?`)) return;
+
+    if (!window.confirm(`Delete user "${user.name}"?`)) {
+return;
+}
+
     router.delete(`/admin/users/${user.id}`);
   };
 

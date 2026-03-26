@@ -1,6 +1,6 @@
 import { Head, Link, router } from '@inertiajs/react';
-import { useState, useEffect, useCallback } from 'react';
 import { Wallet } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
 import AppLayout from '@/layouts/app-layout';
 import { dashboard } from '@/routes';
 import tablesRoutes from '@/routes/tables';
@@ -62,12 +62,17 @@ function formatElapsed(seconds: number): string {
     const m = Math.floor((s % 3600) / 60);
     const sec = s % 60;
     const pad = (n: number) => n.toString().padStart(2, '0');
+
     return `${pad(h)}:${pad(m)}:${pad(sec)}`;
 }
 
 function formatDuration(seconds: number): string {
     const m = Math.floor(seconds / 60);
-    if (m >= 60) return `${Math.floor(m / 60)}h ${m % 60}m`;
+
+    if (m >= 60) {
+return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
     return `${m}m`;
 }
 
@@ -81,46 +86,83 @@ export default function Dashboard({ today, rate_per_minute, tables, running_sess
 
     useEffect(() => {
         const id = setInterval(() => setNow(Date.now()), 1000);
+
         return () => clearInterval(id);
     }, []);
 
     const getLiveElapsedSeconds = useCallback((row: TableRow): number | null => {
-        if (row.elapsed_seconds == null) return null;
-        if (row.session_status === 'paused') return row.elapsed_seconds;
-        if (!row.last_resume_at) return row.elapsed_seconds;
+        if (row.elapsed_seconds == null) {
+return null;
+}
+
+        if (row.session_status === 'paused') {
+return row.elapsed_seconds;
+}
+
+        if (!row.last_resume_at) {
+return row.elapsed_seconds;
+}
+
         const resumeMs = new Date(row.last_resume_at).getTime();
+
         return row.elapsed_seconds + Math.max(0, Math.floor((now - resumeMs) / 1000));
     }, [now]);
 
     const getLiveBill = useCallback((row: TableRow): number | null => {
         const sec = getLiveElapsedSeconds(row);
-        if (sec == null) return null;
+
+        if (sec == null) {
+return null;
+}
+
         const timeTotal = Math.round((sec / 60) * (rate_per_minute ?? RATE_PER_MINUTE) * 100) / 100;
+
         return Math.round((timeTotal + (row.items_total ?? 0)) * 100) / 100;
     }, [getLiveElapsedSeconds, rate_per_minute]);
 
     const getRunningSessionLive = useCallback((s: RunningSession) => {
         let sec = s.elapsed_seconds;
+
         if (s.session_status === 'running' && s.last_resume_at) {
             const resumeMs = new Date(s.last_resume_at).getTime();
             sec = s.elapsed_seconds + Math.max(0, Math.floor((now - resumeMs) / 1000));
         }
+
         const timeTotal = Math.round((sec / 60) * (rate_per_minute ?? RATE_PER_MINUTE) * 100) / 100;
         const bill = Math.round((timeTotal + (s.items_total ?? 0)) * 100) / 100;
+
         return { duration: formatDuration(sec), bill };
     }, [now, rate_per_minute]);
 
     const statusLabel = (table: TableRow) => {
-        if (table.status === 'maintenance') return 'Maintenance';
-        if (table.session_status === 'paused') return 'Paused';
-        if (table.session_status === 'running') return 'In Play';
+        if (table.status === 'maintenance') {
+return 'Maintenance';
+}
+
+        if (table.session_status === 'paused') {
+return 'Paused';
+}
+
+        if (table.session_status === 'running') {
+return 'In Play';
+}
+
         return 'Available';
     };
 
     const statusDot = (table: TableRow) => {
-        if (table.status === 'maintenance') return 'bg-red-500';
-        if (table.session_status === 'paused') return 'bg-amber-500';
-        if (table.session_status === 'running') return 'bg-emerald-500';
+        if (table.status === 'maintenance') {
+return 'bg-red-500';
+}
+
+        if (table.session_status === 'paused') {
+return 'bg-amber-500';
+}
+
+        if (table.session_status === 'running') {
+return 'bg-emerald-500';
+}
+
         return 'bg-slate-400';
     };
 
@@ -193,6 +235,7 @@ export default function Dashboard({ today, rate_per_minute, tables, running_sess
                             {tables.map((table) => {
                                 const liveElapsed = getLiveElapsedSeconds(table);
                                 const liveBill = getLiveBill(table);
+
                                 return (
                                     <li key={table.id}>
                                         <Link
@@ -249,6 +292,7 @@ export default function Dashboard({ today, rate_per_minute, tables, running_sess
                                 <tbody>
                                     {running_sessions.map((s) => {
                                         const live = getRunningSessionLive(s);
+
                                         return (
                                             <tr key={s.table_id} className="border-b border-sidebar-border/50 last:border-0">
                                                 <td className="px-4 py-3">

@@ -1,9 +1,9 @@
 import { Head, router, useForm } from '@inertiajs/react';
-import AppLayout from '@/layouts/app-layout';
-import type { BreadcrumbItem } from '@/types';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
+import AppLayout from '@/layouts/app-layout';
+import type { BreadcrumbItem } from '@/types';
 
 type Table = {
   id: number;
@@ -40,22 +40,35 @@ export default function AdminTables({ tables }: Props) {
 
   const handleRename = (table: Table) => {
     const name = window.prompt('New table name', table.name);
-    if (!name) return;
+
+    if (!name) {
+return;
+}
+
     router.put(`/admin/tables/${table.id}`, { name });
   };
 
   const handleStatus = (table: Table) => {
     const status = window.prompt('Status (available/maintenance)', table.status);
-    if (!status) return;
+
+    if (!status) {
+return;
+}
+
     if (!['available', 'maintenance'].includes(status)) {
       alert('Only "available" or "maintenance" are allowed here.');
+
       return;
     }
+
     router.put(`/admin/tables/${table.id}`, { status });
   };
 
   const handleDelete = (table: Table) => {
-    if (!window.confirm(`Delete table "${table.name}"?`)) return;
+    if (!window.confirm(`Delete table "${table.name}"?`)) {
+return;
+}
+
     router.delete(`/admin/tables/${table.id}`);
   };
 

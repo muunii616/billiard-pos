@@ -1,14 +1,13 @@
 import { Head, router } from '@inertiajs/react';
-import { useState } from 'react';
 import { CalendarDays } from 'lucide-react';
+import { useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis } from 'recharts';
-import AppLayout from '@/layouts/app-layout';
-import type { BreadcrumbItem } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import type {
+  ChartConfig} from '@/components/ui/chart';
 import {
-  ChartConfig,
   ChartContainer,
   ChartLegend,
   ChartLegendContent,
@@ -30,6 +29,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import AppLayout from '@/layouts/app-layout';
+import type { BreadcrumbItem } from '@/types';
 
 type Summary = {
   total_revenue: number;
@@ -81,6 +82,7 @@ export default function Overview({ mode, date, month, summary, charts, invoices,
 
   const parseIsoDate = (value: string) => {
     const d = new Date(`${value}T00:00:00`);
+
     return Number.isNaN(d.getTime()) ? new Date() : d;
   };
 
@@ -88,6 +90,7 @@ export default function Overview({ mode, date, month, summary, charts, invoices,
     const y = value.getFullYear();
     const m = String(value.getMonth() + 1).padStart(2, '0');
     const d = String(value.getDate()).padStart(2, '0');
+
     return `${y}-${m}-${d}`;
   };
 
@@ -105,7 +108,10 @@ export default function Overview({ mode, date, month, summary, charts, invoices,
   };
 
   const handleDateChange = (selected?: Date) => {
-    if (!selected) return;
+    if (!selected) {
+return;
+}
+
     router.get(
       '/overview',
       {
@@ -187,7 +193,10 @@ export default function Overview({ mode, date, month, summary, charts, invoices,
           <Popover
             open={calendarOpen}
             onOpenChange={(open) => {
-              if (open) setMonthlyYear(Number(month.slice(0, 4)) || new Date().getFullYear());
+              if (open) {
+setMonthlyYear(Number(month.slice(0, 4)) || new Date().getFullYear());
+}
+
               setCalendarOpen(open);
             }}
           >
