@@ -1,5 +1,15 @@
 import { Head, router, useForm } from '@inertiajs/react';
 import { useState } from 'react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -65,6 +75,7 @@ return 'Sets';
   });
   const [editOpen, setEditOpen] = useState(false);
   const [editingProductId, setEditingProductId] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
   const {
     data: editData,
     setData: setEditData,
@@ -90,11 +101,17 @@ return 'Sets';
   };
 
   const handleDelete = (product: Product) => {
-    if (!window.confirm(`Delete product "${product.name}"?`)) {
-return;
-}
+    setDeleteTarget(product);
+  };
 
-    router.delete(`/admin/products/${product.id}`);
+  const confirmDelete = () => {
+    if (!deleteTarget) {
+      return;
+    }
+
+    router.delete(`/admin/products/${deleteTarget.id}`, {
+      onFinish: () => setDeleteTarget(null),
+    });
   };
 
   const openEditModal = (product: Product) => {
@@ -264,6 +281,27 @@ return;
           </form>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete product?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone.
+              {deleteTarget ? ` "${deleteTarget.name}" will be permanently removed.` : ''}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmDelete}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppLayout>
   );
 }

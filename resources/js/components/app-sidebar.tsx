@@ -1,5 +1,5 @@
 import { Link, usePage } from '@inertiajs/react';
-import { BarChart3, LayoutGrid, Table2, Wallet } from 'lucide-react';
+import { BarChart3, LayoutGrid, Table2, Users, Wallet } from 'lucide-react';
 import { NavFooter } from '@/components/nav-footer';
 import { NavMain } from '@/components/nav-main';
 import { NavUser } from '@/components/nav-user';
@@ -52,6 +52,11 @@ export function AppSidebar() {
                   title: 'Products',
                   href: '/admin/products',
                   icon: LayoutGrid,
+              },
+              {
+                  title: 'Users',
+                  href: '/admin/users',
+                  icon: Users,
               },
           ]
         : mainNavItems;

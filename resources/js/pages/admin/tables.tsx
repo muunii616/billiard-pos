@@ -1,4 +1,15 @@
 import { Head, router, useForm } from '@inertiajs/react';
+import { useState } from 'react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,6 +41,7 @@ export default function AdminTables({ tables }: Props) {
   const { data, setData, post, reset } = useForm({
     name: '',
   });
+  const [deleteTarget, setDeleteTarget] = useState<Table | null>(null);
 
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,11 +77,17 @@ return;
   };
 
   const handleDelete = (table: Table) => {
-    if (!window.confirm(`Delete table "${table.name}"?`)) {
-return;
-}
+    setDeleteTarget(table);
+  };
 
-    router.delete(`/admin/tables/${table.id}`);
+  const confirmDelete = () => {
+    if (!deleteTarget) {
+      return;
+    }
+
+    router.delete(`/admin/tables/${deleteTarget.id}`, {
+      onFinish: () => setDeleteTarget(null),
+    });
   };
 
   const statusColor = (status: string) => {
@@ -127,6 +145,27 @@ return;
           </div>
         </div>
       </div>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete table?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone.
+              {deleteTarget ? ` "${deleteTarget.name}" will be permanently removed.` : ''}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmDelete}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppLayout>
   );
 }

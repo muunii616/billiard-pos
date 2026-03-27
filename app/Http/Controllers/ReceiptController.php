@@ -11,7 +11,7 @@ class ReceiptController extends Controller
 {
     public function sendEmail(Request $request, Receipt $receipt)
     {
-        $receipt->load(['session.table', 'session.items.product', 'checkoutSession.gameSessions.table', 'checkoutSession.gameSessions.items.product', 'checkoutSession.items.product', 'payments']);
+        $receipt->load(['session.table', 'session.items', 'checkoutSession.gameSessions.table', 'checkoutSession.gameSessions.items', 'checkoutSession.items', 'payments']);
 
         if (empty($receipt->customer_email)) {
             return response()->json(['message' => 'No customer email on this receipt.'], 422);
@@ -33,7 +33,7 @@ class ReceiptController extends Controller
             }
             foreach ($session->items as $item) {
                 $lineItems[] = [
-                    'description' => $item->product->name . ' x' . $item->quantity,
+                    'description' => ($item->product_name ?? $item->product?->name ?? 'Deleted product') . ' x' . $item->quantity,
                     'quantity' => $item->quantity,
                     'subtotal' => (float) $item->total_price,
                 ];
@@ -52,7 +52,7 @@ class ReceiptController extends Controller
                 }
                 foreach ($session->items as $item) {
                     $lineItems[] = [
-                        'description' => $item->product->name . ' x' . $item->quantity,
+                        'description' => ($item->product_name ?? $item->product?->name ?? 'Deleted product') . ' x' . $item->quantity,
                         'quantity' => $item->quantity,
                         'subtotal' => (float) $item->total_price,
                     ];
@@ -60,7 +60,7 @@ class ReceiptController extends Controller
             }
             foreach ($cs->items as $item) {
                 $lineItems[] = [
-                    'description' => $item->product->name . ' x' . $item->quantity,
+                    'description' => ($item->product_name ?? $item->product?->name ?? 'Deleted product') . ' x' . $item->quantity,
                     'quantity' => $item->quantity,
                     'subtotal' => (float) $item->total_price,
                 ];

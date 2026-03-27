@@ -10,6 +10,8 @@ class CheckoutSessionItem extends Model
     protected $fillable = [
         'checkout_session_id',
         'product_id',
+        'product_name',
+        'product_category',
         'quantity',
         'unit_price',
         'total_price',

@@ -1,6 +1,16 @@
 import { Head, router, usePage } from '@inertiajs/react';
 import { Wallet } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -90,6 +100,7 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
   const [emailSending, setEmailSending] = useState(false);
   const [emailMessage, setEmailMessage] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [mergeConfirmOpen, setMergeConfirmOpen] = useState(false);
   const [addItemModalOpen, setAddItemModalOpen] = useState(false);
   const [addItemCheckoutId, setAddItemCheckoutId] = useState<number | null>(null);
   const [addItemSearch, setAddItemSearch] = useState('');
@@ -244,19 +255,21 @@ headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
 
       return;
     }
+    setMergeConfirmOpen(true);
+  };
+
+  const confirmMergeTabs = () => {
+    if (selectedIds.length < 2) {
+      setMergeConfirmOpen(false);
+
+      return;
+    }
 
     const targetId = selectedIds[0];
     const sourceIds = selectedIds.slice(1);
-    const ok = window.confirm(
-      `Merge ${selectedIds.length} tabs into Tab #${targetId}? This cannot be undone.`,
-    );
-
-    if (!ok) {
-return;
-}
-
     router.post('/checkouts/merge', { target_id: targetId, source_ids: sourceIds }, {
       onSuccess: () => setSelectedIds([]),
+      onFinish: () => setMergeConfirmOpen(false),
     });
   };
 
@@ -371,6 +384,25 @@ return;
           )}
         </div>
 
+        <AlertDialog open={mergeConfirmOpen} onOpenChange={setMergeConfirmOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Merge selected tabs?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {selectedIds.length >= 2
+                  ? `Tab #${selectedIds[0]} will be the target. ${selectedIds.length - 1} tab(s) will be merged into it. This action cannot be undone.`
+                  : 'Select at least two tabs to merge.'}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={confirmMergeTabs}>
+                Confirm merge
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
         {checkouts.length === 0 ? (
           <div className="rounded-xl border border-sidebar-border/70 bg-muted/30 p-8 text-center text-muted-foreground">
             No open tabs. Move a session from Tables → End → Move to open tab.
@@ -480,7 +512,7 @@ return;
                     Items
                   </Label>
                   <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-3">
-                    <div className="grid max-h-[34vh] grid-cols-1 gap-3 overflow-y-auto text-sm sm:grid-cols-2 lg:max-h-none lg:h-full">
+                    <div className="grid max-h-[34vh] grid-cols-1 content-start gap-3 overflow-y-auto text-sm sm:grid-cols-2 lg:max-h-none lg:h-full">
                       {filteredProducts.length === 0 && (
                         <div className="col-span-2 px-2 py-1 text-muted-foreground">
                           No products match your search.

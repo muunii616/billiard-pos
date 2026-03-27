@@ -17,7 +17,7 @@ class CheckoutSessionController extends Controller
     /** Compute time_total, items_total, grand_total for a checkout session. */
     private function checkoutTotals(CheckoutSession $checkout): array
     {
-        $checkout->load(['gameSessions.items', 'items.product']);
+        $checkout->load(['gameSessions.items', 'items']);
         $timeTotal = (float) $checkout->gameSessions->sum('time_total');
         $sessionItemsTotal = (float) $checkout->gameSessions->sum(fn ($s) => $s->items->sum('total_price'));
         $tabItemsTotal = (float) $checkout->items->sum('total_price');
@@ -33,7 +33,7 @@ class CheckoutSessionController extends Controller
 
     public function index(): Response
     {
-        $checkouts = CheckoutSession::with(['gameSessions.table', 'items.product'])
+        $checkouts = CheckoutSession::with(['gameSessions.table', 'items'])
             ->where('status', 'open')
             ->orderByDesc('id')
             ->get()
@@ -141,6 +141,8 @@ class CheckoutSessionController extends Controller
         $product = Product::findOrFail($productId);
         $item = $checkout->items()->firstOrNew(['product_id' => $product->id]);
         $item->quantity = ($item->exists ? $item->quantity : 0) + $quantity;
+        $item->product_name = $product->name;
+        $item->product_category = $product->category;
         $item->unit_price = $product->price;
         $item->total_price = round($item->quantity * $item->unit_price, 2);
         $item->save();
@@ -220,7 +222,7 @@ class CheckoutSessionController extends Controller
             $checkout->update(['status' => 'completed', 'completed_at' => $endedAt]);
         });
 
-        $receipt = Receipt::with(['checkoutSession.gameSessions.table', 'checkoutSession.gameSessions.items.product', 'checkoutSession.items.product', 'payments'])
+        $receipt = Receipt::with(['checkoutSession.gameSessions.table', 'checkoutSession.gameSessions.items', 'checkoutSession.items', 'payments'])
             ->findOrFail($receiptId);
 
         $ratePerMinute = 0.20;
@@ -242,7 +244,7 @@ class CheckoutSessionController extends Controller
             foreach ($session->items as $item) {
                 $lineItems[] = [
                     'type' => 'product',
-                    'description' => $item->product->name,
+                    'description' => $item->product_name ?? $item->product?->name ?? 'Deleted product',
                     'quantity' => $item->quantity,
                     'unit_price' => (float) $item->unit_price,
                     'subtotal' => (float) $item->total_price,
@@ -252,7 +254,7 @@ class CheckoutSessionController extends Controller
         foreach ($receipt->checkoutSession->items as $item) {
             $lineItems[] = [
                 'type' => 'product',
-                'description' => $item->product->name,
+                'description' => $item->product_name ?? $item->product?->name ?? 'Deleted product',
                 'quantity' => $item->quantity,
                 'unit_price' => (float) $item->unit_price,
                 'subtotal' => (float) $item->total_price,
@@ -309,8 +311,17 @@ class CheckoutSessionController extends Controller
 
                 // Move items, merging by product
                 foreach ($source->items as $item) {
-                    $existing = CheckoutSessionItem::where('checkout_session_id', $target->id)
-                        ->where('product_id', $item->product_id)
+                    $existing = CheckoutSessionItem::query()
+                        ->where('checkout_session_id', $target->id)
+                        ->when(
+                            $item->product_id !== null,
+                            fn ($query) => $query->where('product_id', $item->product_id),
+                            fn ($query) => $query
+                                ->whereNull('product_id')
+                                ->where('product_name', $item->product_name)
+                                ->where('product_category', $item->product_category)
+                                ->where('unit_price', $item->unit_price),
+                        )
                         ->first();
 
                     if ($existing) {

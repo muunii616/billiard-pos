@@ -36,7 +36,7 @@ class TableController extends Controller
     public function index(): Response
     {
         $tables = BilliardTable::with(['sessions' => function ($query) {
-            $query->with('items.product')->latest()->limit(1);
+            $query->with('items')->latest()->limit(1);
         }])->orderBy('id')->get()
             ->map(function (BilliardTable $table) {
                 $currentSession = $table->sessions->first();
@@ -54,7 +54,7 @@ class TableController extends Controller
                     }
                     $sessionItems = $currentSession->items->map(fn ($item) => [
                         'id' => $item->id,
-                        'product_name' => $item->product->name,
+                        'product_name' => $item->product_name ?? $item->product?->name ?? 'Deleted product',
                         'quantity' => $item->quantity,
                         'unit_price' => (float) $item->unit_price,
                         'total_price' => (float) $item->total_price,
@@ -278,7 +278,7 @@ class TableController extends Controller
             }
         });
 
-        $receipt = Receipt::with(['session.table', 'session.items.product', 'payments'])
+        $receipt = Receipt::with(['session.table', 'session.items', 'payments'])
             ->findOrFail($receiptId);
 
         $session = $receipt->session;
@@ -319,7 +319,7 @@ class TableController extends Controller
         foreach ($session->items as $item) {
             $invoicePayload['line_items'][] = [
                 'type' => 'product',
-                'description' => $item->product->name,
+                'description' => $item->product_name ?? $item->product?->name ?? 'Deleted product',
                 'quantity' => $item->quantity,
                 'unit_price' => (float) $item->unit_price,
                 'subtotal' => (float) $item->total_price,
@@ -416,6 +416,8 @@ class TableController extends Controller
         ]);
 
         $item->quantity = ($item->exists ? $item->quantity : 0) + $quantity;
+        $item->product_name = $product->name;
+        $item->product_category = $product->category;
         $item->unit_price = $product->price;
         $item->total_price = $item->quantity * $item->unit_price;
         $item->save();

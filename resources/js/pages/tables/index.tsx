@@ -3,6 +3,17 @@ import { Play, Pause, ShoppingCart, ListChecks, Square, Pencil, Plus } from 'luc
 import { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -142,7 +153,7 @@ export default function TablesIndex({ tables, products, receipt: receiptProp, is
   const [editName, setEditName] = useState('');
   const [addTableOpen, setAddTableOpen] = useState(false);
   const [newTableName, setNewTableName] = useState('');
-  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [deleteAlertOpen, setDeleteAlertOpen] = useState(false);
   const [addItemModalOpen, setAddItemModalOpen] = useState(false);
   const [addItemTableId, setAddItemTableId] = useState<number | null>(null);
   const [addItemSearch, setAddItemSearch] = useState('');
@@ -611,7 +622,7 @@ setDetailsTable(table);
   const openEdit = (table: Table) => {
     setEditTable(table);
     setEditName(table.name);
-    setDeleteConfirm(false);
+    setDeleteAlertOpen(false);
   };
   const handleSaveEdit = () => {
     if (!editTable) {
@@ -626,7 +637,7 @@ return;
 }
 
     router.delete(`/admin/tables/${editTable.id}`, { onSuccess: () => {
- setEditTable(null); setDeleteConfirm(false); 
+ setEditTable(null); setDeleteAlertOpen(false); 
 } });
   };
   const handleAddTable = () => {
@@ -985,7 +996,7 @@ handleAddItem(detailsTable.id);
                     Items
                   </Label>
                   <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-3">
-                    <div className="grid max-h-[34vh] grid-cols-1 gap-3 overflow-y-auto text-sm sm:grid-cols-2 lg:max-h-none lg:h-full">
+                    <div className="grid max-h-[34vh] grid-cols-1 content-start gap-3 overflow-y-auto text-sm sm:grid-cols-2 lg:max-h-none lg:h-full">
                       {filteredProducts.length === 0 && (
                         <div className="col-span-2 px-2 py-1 text-muted-foreground">
                           No products match your search.
@@ -1098,14 +1109,29 @@ handleAddItem(detailsTable.id);
                 <DialogFooter className="flex flex-col gap-2 sm:flex-row">
                   <Button variant="outline" onClick={() => setEditTable(null)}>Cancel</Button>
                   <Button onClick={handleSaveEdit}>Save</Button>
-                  {!deleteConfirm ? (
-                    <Button variant="destructive" onClick={() => setDeleteConfirm(true)}>Delete table</Button>
-                  ) : (
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" onClick={() => setDeleteConfirm(false)}>Cancel</Button>
-                      <Button variant="destructive" size="sm" onClick={handleDeleteTable}>Confirm delete</Button>
-                    </div>
-                  )}
+                  <AlertDialog open={deleteAlertOpen} onOpenChange={setDeleteAlertOpen}>
+                    <AlertDialogTrigger asChild>
+                      <Button variant="destructive">Delete table</Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Delete table?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          This action cannot be undone.
+                          {editTable ? ` "${editTable.name}" will be permanently removed.` : ''}
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          onClick={handleDeleteTable}
+                        >
+                          Confirm delete
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 </DialogFooter>
               </div>
             )}

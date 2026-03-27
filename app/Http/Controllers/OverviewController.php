@@ -50,9 +50,9 @@ class OverviewController extends Controller
 
         $receipts = Receipt::with([
             'payments',
-            'session.items.product',
-            'checkoutSession.items.product',
-            'checkoutSession.gameSessions.items.product',
+            'session.items',
+            'checkoutSession.items',
+            'checkoutSession.gameSessions.items',
         ])
             ->whereBetween('paid_at', [$start, $end])
             ->orderByDesc('paid_at')
@@ -84,7 +84,7 @@ class OverviewController extends Controller
             // Session-only receipt items
             if ($receipt->session) {
                 foreach ($receipt->session->items as $item) {
-                    $category = $this->normalizeCategory($item->product?->category);
+                    $category = $this->normalizeCategory($item->product_category ?? $item->product?->category);
                     $sales[$category] = round(($sales[$category] ?? 0) + (float) $item->total_price, 2);
                 }
             }
@@ -92,12 +92,12 @@ class OverviewController extends Controller
             // Checkout receipt includes tab items and game session items
             if ($receipt->checkoutSession) {
                 foreach ($receipt->checkoutSession->items as $item) {
-                    $category = $this->normalizeCategory($item->product?->category);
+                    $category = $this->normalizeCategory($item->product_category ?? $item->product?->category);
                     $sales[$category] = round(($sales[$category] ?? 0) + (float) $item->total_price, 2);
                 }
                 foreach ($receipt->checkoutSession->gameSessions as $session) {
                     foreach ($session->items as $item) {
-                        $category = $this->normalizeCategory($item->product?->category);
+                        $category = $this->normalizeCategory($item->product_category ?? $item->product?->category);
                         $sales[$category] = round(($sales[$category] ?? 0) + (float) $item->total_price, 2);
                     }
                 }

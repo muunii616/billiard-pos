@@ -12,6 +12,8 @@ class SessionItem extends Model
     protected $fillable = [
         'game_session_id',
         'product_id',
+        'product_name',
+        'product_category',
         'quantity',
         'unit_price',
         'total_price',
