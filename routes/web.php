@@ -31,6 +31,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('tables/{table}/items/bulk', [TableController::class, 'addItemsBulk'])->name('tables.items.bulk');
     Route::get('checkouts', [CheckoutSessionController::class, 'index'])->name('checkouts.index');
     Route::get('checkouts/options', [CheckoutSessionController::class, 'options'])->name('checkouts.options');
+    Route::post('checkouts/from-products', [CheckoutSessionController::class, 'createFromProducts'])->name('checkouts.from-products');
     Route::get('checkouts/{checkout}/summary', [CheckoutSessionController::class, 'summary'])->name('checkouts.summary');
     Route::post('checkouts/{checkout}/items', [CheckoutSessionController::class, 'addItem'])->name('checkouts.items.add');
     Route::post('checkouts/{checkout}/items/bulk', [CheckoutSessionController::class, 'addItemsBulk'])->name('checkouts.items.bulk');

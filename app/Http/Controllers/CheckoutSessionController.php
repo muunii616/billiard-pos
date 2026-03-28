@@ -136,6 +136,26 @@ class CheckoutSessionController extends Controller
         return redirect()->back();
     }
 
+    /** Create a products-only open tab and attach provided items. */
+    public function createFromProducts(Request $request)
+    {
+        $data = $request->validate([
+            'items' => ['required', 'array', 'min:1'],
+            'items.*.product_id' => ['required', 'exists:products,id'],
+            'items.*.quantity' => ['required', 'integer', 'min:1'],
+        ]);
+
+        $checkout = CheckoutSession::create(['status' => 'open']);
+
+        foreach ($data['items'] as $item) {
+            $this->addProductToCheckout($checkout, (int) $item['product_id'], (int) $item['quantity']);
+        }
+
+        return response()->json([
+            'checkout_id' => $checkout->id,
+        ]);
+    }
+
     private function addProductToCheckout(CheckoutSession $checkout, int $productId, int $quantity): void
     {
         $product = Product::findOrFail($productId);
@@ -274,6 +294,13 @@ class CheckoutSessionController extends Controller
             'line_items' => $lineItems,
             'payments' => $receipt->payments->map(fn ($p) => ['method' => $p->method, 'amount' => (float) $p->amount])->all(),
         ];
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'message' => 'Payment completed.',
+                'receipt' => $invoicePayload,
+            ]);
+        }
 
         return redirect()->route('checkouts.index')->with('receipt', $invoicePayload);
     }

@@ -1,6 +1,7 @@
 import { Head, router, usePage, useRemember } from '@inertiajs/react';
-import { Play, Pause, ShoppingCart, ListChecks, Square, Pencil, Plus } from 'lucide-react';
+import { Play, Pause, ShoppingCart, ListChecks, Square, Pencil, Plus, CheckCircle2Icon } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -161,6 +162,7 @@ export default function TablesIndex({ tables, products, receipt: receiptProp, is
   const [addItemCart, setAddItemCart] = useState<{ productId: number; name: string; price: number; quantity: number; category: string }[]>([]);
   const [isTouchDevice, setIsTouchDevice] = useState(false);
   const [activeMobileTableId, setActiveMobileTableId] = useRemember<number | null>(null, 'tables.activeMobileTableId');
+  const [tabSuccessMessage, setTabSuccessMessage] = useState<string | null>(null);
   const money = (value: number) => `$${(Number(value) || 0).toFixed(2)}`;
 
   const pageErrors = (usePage().props as { errors?: Record<string, string> }).errors ?? {};
@@ -171,6 +173,18 @@ export default function TablesIndex({ tables, products, receipt: receiptProp, is
 setInvoiceReceipt(receiptProp);
 }
   }, [receiptProp]);
+
+  useEffect(() => {
+    if (!tabSuccessMessage) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setTabSuccessMessage(null);
+    }, 3500);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [tabSuccessMessage]);
 
   // Live timer: tick every second
   useEffect(() => {
@@ -336,6 +350,7 @@ return;
 
     router.post(`/tables/${endChoiceTableId}/move-to-checkout`, {}, {
       onSuccess: () => {
+        setTabSuccessMessage('Open tab created successfully.');
         setShowExistingTabPicker(false);
         setExistingTabLoading(false);
         setExistingTabOptions([]);
@@ -394,6 +409,7 @@ return;
 
     router.post(`/tables/${endChoiceTableId}/move-to-checkout`, { checkout_session_id: selectedExistingTabId }, {
       onSuccess: () => {
+        setTabSuccessMessage('Session moved to existing open tab.');
         setShowExistingTabPicker(false);
         setExistingTabLoading(false);
         setExistingTabOptions([]);
@@ -656,6 +672,15 @@ return;
     <AppLayout breadcrumbs={breadcrumbs}>
       <Head title="Tables" />
       <div className="flex flex-1 flex-col gap-6 rounded-xl p-4">
+        {tabSuccessMessage && (
+          <div className="pointer-events-none fixed left-1/2 top-6 z-50 w-full max-w-md -translate-x-1/2 px-2 sm:px-0">
+            <Alert>
+              <CheckCircle2Icon />
+              <AlertTitle>Success</AlertTitle>
+              <AlertDescription>{tabSuccessMessage}</AlertDescription>
+            </Alert>
+          </div>
+        )}
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold">Tables</h1>
           {isAdmin && (

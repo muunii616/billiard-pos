@@ -20,6 +20,13 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   Table,
   TableBody,
   TableCaption,
@@ -223,17 +230,21 @@ setMonthlyYear(Number(month.slice(0, 4)) || new Date().getFullYear());
                 <div className="w-[280px] p-3">
                   <div className="mb-3 flex items-center justify-between">
                     <span className="text-sm font-medium">Select month</span>
-                    <select
-                      value={monthlyYear}
-                      onChange={(e) => setMonthlyYear(Number(e.target.value))}
-                      className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+                    <Select
+                      value={String(monthlyYear)}
+                      onValueChange={(value) => setMonthlyYear(Number(value))}
                     >
-                      {yearOptions.map((year) => (
-                        <option key={year} value={year}>
-                          {year}
-                        </option>
-                      ))}
-                    </select>
+                      <SelectTrigger className="h-8 w-24">
+                        <SelectValue placeholder="Year" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {yearOptions.map((year) => (
+                          <SelectItem key={year} value={String(year)}>
+                            {year}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div className="grid grid-cols-3 gap-2">
                     {monthLabels.map((label, index) => (
