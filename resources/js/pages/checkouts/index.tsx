@@ -1,5 +1,5 @@
 import { Head, router, usePage } from '@inertiajs/react';
-import { Wallet } from 'lucide-react';
+import { Pencil, Wallet } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import {
   AlertDialog,
@@ -28,6 +28,7 @@ import type { BreadcrumbItem } from '@/types';
 
 type CheckoutRow = {
   id: number;
+  status: string;
   created_at: string;
   table_names: string[];
   time_total: number;
@@ -68,19 +69,60 @@ type InvoiceReceipt = {
   payments: { method: string; amount: number }[];
 };
 
+type TabItemLine = {
+  id: number;
+  product_id: number | null;
+  product_name: string | null;
+  product_category?: string | null;
+  quantity: number;
+  unit_price: number;
+  total_price: number;
+};
+
 type CheckoutSummary = {
   checkout_id: number;
   table_name: string;
   time_total: number;
   items_total: number;
   grand_total: number;
+  tab_items?: TabItemLine[];
 };
 
 type Props = {
   checkouts: CheckoutRow[];
   products: Product[];
   receipt?: InvoiceReceipt | null;
+  isAdmin?: boolean;
 };
+
+function roundMoney(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/** Card/transfer share a cap of grand total; clamp one field against the other. */
+function limitCardOrTransferValue(raw: string, maxAllowed: number): string {
+  const cap = Math.max(0, roundMoney(maxAllowed));
+  if (raw === '') return '';
+  const n = parseFloat(raw);
+  if (Number.isNaN(n)) return raw;
+  if (n < 0) return '0';
+  const clamped = Math.min(n, cap);
+  if (clamped !== n) return clamped === 0 ? '' : String(clamped);
+  return raw;
+}
+
+function adminJsonHeaders(): Record<string, string> {
+  const csrfToken = document.cookie.split('; ').find((r) => r.startsWith('XSRF-TOKEN='))?.split('=')[1];
+  const headers: Record<string, string> = {
+    'X-Requested-With': 'XMLHttpRequest',
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  };
+  if (csrfToken) {
+    headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
+  }
+  return headers;
+}
 
 const breadcrumbs: BreadcrumbItem[] = [
   { title: 'Open tab', href: '/checkouts' },
@@ -106,7 +148,41 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
   const [addItemSearch, setAddItemSearch] = useState('');
   const [addItemCategory, setAddItemCategory] = useState<string>('all');
   const [addItemCart, setAddItemCart] = useState<{ productId: number; name: string; price: number; quantity: number; category: string }[]>([]);
+  const [editTabItemsOpen, setEditTabItemsOpen] = useState(false);
+  const [editTabItemsCheckoutId, setEditTabItemsCheckoutId] = useState<number | null>(null);
+  const [editTabItemsDraft, setEditTabItemsDraft] = useState<TabItemLine[]>([]);
+  const [editTabItemsRemovedIds, setEditTabItemsRemovedIds] = useState<number[]>([]);
+  const [editTabItemsLoading, setEditTabItemsLoading] = useState(false);
+  const [editTabItemsSaving, setEditTabItemsSaving] = useState(false);
+  const [editTabItemsError, setEditTabItemsError] = useState<string | null>(null);
   const money = (value: number) => `$${(Number(value) || 0).toFixed(2)}`;
+  const payGrandTotalNum =
+    payModalOpen && summary ? roundMoney(Number(summary.grand_total)) : 0;
+  const cardAmountNum = roundMoney(parseFloat(card) || 0);
+  const transferAmountNum = roundMoney(parseFloat(transfer) || 0);
+  const maxCardAmount =
+    payModalOpen && summary ? Math.max(0, payGrandTotalNum - transferAmountNum) : 0;
+  const maxTransferAmount =
+    payModalOpen && summary ? Math.max(0, payGrandTotalNum - cardAmountNum) : 0;
+  const { auth, isAdmin } = usePage().props as { auth?: { user?: { role?: string } }; isAdmin?: boolean };
+  const adminEnabled = !!(isAdmin || auth?.user?.role === 'admin');
+  const [showAll, setShowAll] = useState(false);
+  const [deleteTabConfirmOpen, setDeleteTabConfirmOpen] = useState(false);
+  const [deleteTabId, setDeleteTabId] = useState<number | null>(null);
+  const [reopenTabConfirmOpen, setReopenTabConfirmOpen] = useState(false);
+  const [reopenTabId, setReopenTabId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!payModalOpen || !summary) return;
+    const g = roundMoney(Number(summary.grand_total));
+    const d = roundMoney(parseFloat(card) || 0);
+    const t = roundMoney(parseFloat(transfer) || 0);
+    if (d + t <= g + 0.01) return;
+    const newT = Math.min(t, g);
+    const newD = Math.min(d, Math.max(0, g - newT));
+    setCard(newD === 0 ? '' : String(newD));
+    setTransfer(newT === 0 ? '' : String(newT));
+  }, [payModalOpen, summary?.checkout_id, summary?.grand_total]);
 
   const pageErrors = (usePage().props as { errors?: Record<string, string> }).errors ?? {};
 
@@ -115,6 +191,18 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
 setInvoiceReceipt(receiptProp);
 }
   }, [receiptProp]);
+
+  useEffect(() => {
+    if (!adminEnabled) return;
+    const params = new URLSearchParams(window.location.search);
+    setShowAll(params.get('all') === '1');
+  }, [adminEnabled]);
+
+  const toggleShowAll = () => {
+    const next = !showAll;
+    setShowAll(next);
+    router.get('/checkouts', next ? { all: 1 } : {}, { preserveScroll: true, replace: true });
+  };
 
   useEffect(() => {
     if (payModalOpen && pageErrors.payments) {
@@ -149,6 +237,79 @@ throw new Error('Could not load summary');
     setSummary(null);
   };
 
+  const openEditTabItems = (checkoutId: number) => {
+    setEditTabItemsCheckoutId(checkoutId);
+    setEditTabItemsOpen(true);
+    setEditTabItemsError(null);
+    setEditTabItemsRemovedIds([]);
+    setEditTabItemsLoading(true);
+    setEditTabItemsDraft([]);
+    fetch(`/checkouts/${checkoutId}/summary`)
+      .then((res) => {
+        if (!res.ok) throw new Error('load');
+        return res.json();
+      })
+      .then((data: CheckoutSummary) => {
+        setEditTabItemsDraft(data.tab_items ?? []);
+      })
+      .catch(() => setEditTabItemsError('Failed to load tab items.'))
+      .finally(() => setEditTabItemsLoading(false));
+  };
+
+  const closeEditTabItems = () => {
+    setEditTabItemsOpen(false);
+    setEditTabItemsCheckoutId(null);
+    setEditTabItemsDraft([]);
+    setEditTabItemsRemovedIds([]);
+    setEditTabItemsError(null);
+  };
+
+  const saveEditTabItems = async () => {
+    if (editTabItemsCheckoutId == null) return;
+    setEditTabItemsSaving(true);
+    setEditTabItemsError(null);
+    const items = [
+      ...editTabItemsDraft.map((i) => ({
+        id: i.id,
+        quantity: Math.max(0, Math.floor(Number(i.quantity) || 0)),
+      })),
+      ...editTabItemsRemovedIds.map((id) => ({ id, quantity: 0 })),
+    ];
+    try {
+      const res = await fetch(`/admin/checkouts/${editTabItemsCheckoutId}/items`, {
+        method: 'PUT',
+        headers: adminJsonHeaders(),
+        credentials: 'same-origin',
+        body: JSON.stringify({ items }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setEditTabItemsError(typeof data.message === 'string' ? data.message : 'Could not save items.');
+        return;
+      }
+      closeEditTabItems();
+      router.reload({ preserveScroll: true });
+    } finally {
+      setEditTabItemsSaving(false);
+    }
+  };
+
+  const removeEditTabLine = (id: number) => {
+    setEditTabItemsDraft((d) => d.filter((x) => x.id !== id));
+    setEditTabItemsRemovedIds((r) => (r.includes(id) ? r : [...r, id]));
+  };
+
+  const updateEditTabQty = (id: number, qty: number) => {
+    const q = Math.max(1, Math.floor(qty));
+    setEditTabItemsDraft((d) =>
+      d.map((row) =>
+        row.id === id
+          ? { ...row, quantity: q, total_price: roundMoney(q * row.unit_price) }
+          : row,
+      ),
+    );
+  };
+
   const handlePayComplete = () => {
     if (!summary || payCheckoutId == null) {
 return;
@@ -157,30 +318,53 @@ return;
     const cashNum = parseFloat(cash) || 0;
     const cardNum = parseFloat(card) || 0;
     const transferNum = parseFloat(transfer) || 0;
-    const totalPaid = Math.round((cashNum + cardNum + transferNum) * 100) / 100;
-    const grandTotalCents = Math.round(summary.grand_total * 100);
-    const totalPaidCents = Math.round(totalPaid * 100);
+    const grandTotal = Math.round(Number(summary.grand_total) * 100) / 100;
+    const cardTransferSum = Math.round((cardNum + transferNum) * 100) / 100;
+    if (cardTransferSum > grandTotal + 0.01) {
+      setPayError(
+        `Card plus transfer (${money(cardTransferSum)}) cannot exceed grand total (${money(grandTotal)}). Reduce card or transfer, or use cash for the rest.`,
+      );
+      return;
+    }
 
-    if (totalPaidCents !== grandTotalCents) {
-      setPayError(`Total paid must equal grand total (${money(summary.grand_total)}).`);
+    const totalEntered = Math.round((cashNum + cardNum + transferNum) * 100) / 100;
+    const change = Math.round((totalEntered - grandTotal) * 100) / 100;
 
+    if (totalEntered + 1e-9 < grandTotal) {
+      setPayError(`Total paid (${money(totalEntered)}) must be at least grand total (${money(grandTotal)}).`);
+      return;
+    }
+
+    if (change > 0.01 && cashNum + 1e-9 < change) {
+      setPayError(
+        `Change is ${money(change)}. Cash (${money(cashNum)}) must cover change when the customer is due cash back.`,
+      );
+      return;
+    }
+
+    const cashApplied = change > 0.01 ? Math.round((cashNum - change) * 100) / 100 : cashNum;
+    if (cashApplied < -0.01) {
+      setPayError('Invalid cash amount.');
       return;
     }
 
     setPayError(null);
     const payments: { method: string; amount: number }[] = [];
-
-    if (cashNum > 0) {
-payments.push({ method: 'cash', amount: cashNum });
-}
-
     if (cardNum > 0) {
-payments.push({ method: 'card', amount: cardNum });
-}
-
+      payments.push({ method: 'card', amount: cardNum });
+    }
     if (transferNum > 0) {
-payments.push({ method: 'transfer_qr', amount: transferNum });
-}
+      payments.push({ method: 'transfer_qr', amount: transferNum });
+    }
+    if (cashApplied > 0) {
+      payments.push({ method: 'cash', amount: cashApplied });
+    }
+
+    const paymentsSum = Math.round(payments.reduce((s, p) => s + p.amount, 0) * 100) / 100;
+    if (Math.abs(paymentsSum - grandTotal) > 0.02) {
+      setPayError('Could not balance payment split. Check amounts.');
+      return;
+    }
 
     const payload: { payments: { method: string; amount: number }[]; customer_email?: string } = { payments };
 
@@ -366,22 +550,61 @@ return;
     });
   };
 
+  const confirmDeleteTab = async () => {
+    if (deleteTabId == null) return;
+    const res = await fetch(`/admin/checkouts/${deleteTabId}/void`, {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest', Accept: 'application/json' },
+    });
+    const data = await res.json().catch(() => ({}));
+    setDeleteTabConfirmOpen(false);
+    setDeleteTabId(null);
+    if (!res.ok) {
+      alert(data.message || 'Failed to delete tab.');
+      return;
+    }
+    router.get('/checkouts', showAll ? { all: 1 } : {}, { preserveScroll: true, replace: true });
+  };
+
+  const confirmReopenTab = async () => {
+    if (reopenTabId == null) return;
+    const res = await fetch(`/admin/checkouts/${reopenTabId}/reopen`, {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest', Accept: 'application/json' },
+    });
+    const data = await res.json().catch(() => ({}));
+    setReopenTabConfirmOpen(false);
+    setReopenTabId(null);
+    if (!res.ok) {
+      alert(data.message || 'Failed to reopen tab.');
+      return;
+    }
+    router.get('/checkouts', showAll ? { all: 1 } : {}, { preserveScroll: true, replace: true });
+  };
+
   return (
     <AppLayout breadcrumbs={breadcrumbs}>
       <Head title="Open tab" />
       <div className="flex flex-1 flex-col gap-4 rounded-xl p-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <h1 className="text-xl font-semibold">Open tab</h1>
-          {checkouts.length > 1 && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={selectedIds.length < 2}
-              onClick={handleMergeTabs}
-            >
-              Merge tabs
-            </Button>
-          )}
+          <div className="flex items-center gap-2">
+            {adminEnabled && (
+              <Button variant="outline" size="sm" onClick={toggleShowAll}>
+                {showAll ? 'Show open only' : 'Show all'}
+              </Button>
+            )}
+            {checkouts.length > 1 && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={selectedIds.length < 2}
+                onClick={handleMergeTabs}
+              >
+                Merge tabs
+              </Button>
+            )}
+          </div>
         </div>
 
         <AlertDialog open={mergeConfirmOpen} onOpenChange={setMergeConfirmOpen}>
@@ -399,6 +622,57 @@ return;
               <AlertDialogAction onClick={confirmMergeTabs}>
                 Confirm merge
               </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <AlertDialog
+          open={deleteTabConfirmOpen}
+          onOpenChange={(open) => {
+            setDeleteTabConfirmOpen(open);
+            if (!open) setDeleteTabId(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete tab?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {deleteTabId != null
+                  ? `Tab #${deleteTabId} will be closed without payment. This cannot be undone.`
+                  : ''}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={confirmDeleteTab}
+              >
+                Delete tab
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <AlertDialog
+          open={reopenTabConfirmOpen}
+          onOpenChange={(open) => {
+            setReopenTabConfirmOpen(open);
+            if (!open) setReopenTabId(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Reopen tab?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {reopenTabId != null
+                  ? `A new open tab will be created with the same items as Tab #${reopenTabId}.`
+                  : ''}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={confirmReopenTab}>Reopen</AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
@@ -443,9 +717,39 @@ return;
                   <Button size="sm" variant="outline" onClick={() => openAddItemModal(row.id)}>
                     Add item
                   </Button>
+                  {adminEnabled && row.status === 'open' && (
+                    <Button size="sm" variant="outline" className="gap-1" onClick={() => openEditTabItems(row.id)}>
+                      <Pencil className="h-3.5 w-3.5" />
+                      Edit items
+                    </Button>
+                  )}
                   <Button size="sm" onClick={() => openPayModal(row.id)}>
                     Pay now
                   </Button>
+                  {adminEnabled && row.status !== 'open' && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setReopenTabId(row.id);
+                        setReopenTabConfirmOpen(true);
+                      }}
+                    >
+                      Reopen
+                    </Button>
+                  )}
+                  {adminEnabled && row.status === 'open' && (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => {
+                        setDeleteTabId(row.id);
+                        setDeleteTabConfirmOpen(true);
+                      }}
+                    >
+                      Delete
+                    </Button>
+                  )}
                 </div>
               </div>
             ))}
@@ -596,12 +900,82 @@ return;
           </DialogContent>
         </Dialog>
 
+        <Dialog
+          open={editTabItemsOpen}
+          onOpenChange={(open) => {
+            if (!open) closeEditTabItems();
+          }}
+        >
+          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Edit tab items — #{editTabItemsCheckoutId ?? ''}</DialogTitle>
+              <DialogDescription>
+                Change quantities or remove product lines on this open tab. Time and table session charges are not edited here. Use <span className="font-medium">Add item</span> to add products.
+              </DialogDescription>
+            </DialogHeader>
+            {editTabItemsLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+            {!editTabItemsLoading && editTabItemsDraft.length === 0 && (
+              <p className="text-sm text-muted-foreground">No product lines on this tab yet.</p>
+            )}
+            {!editTabItemsLoading && editTabItemsDraft.length > 0 && (
+              <ul className="max-h-64 space-y-3 overflow-y-auto text-sm">
+                {editTabItemsDraft.map((line) => (
+                  <li
+                    key={line.id}
+                    className="flex flex-col gap-2 rounded-md border border-border/80 bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium">{line.product_name ?? 'Item'}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {money(line.unit_price)} each · line {money(line.total_price)}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Label className="sr-only" htmlFor={`tab-qty-${line.id}`}>
+                        Quantity
+                      </Label>
+                      <Input
+                        id={`tab-qty-${line.id}`}
+                        type="number"
+                        min={1}
+                        className="h-9 w-20"
+                        value={line.quantity}
+                        onChange={(e) => updateEditTabQty(line.id, Number(e.target.value) || 1)}
+                      />
+                      <Button type="button" size="sm" variant="destructive" onClick={() => removeEditTabLine(line.id)}>
+                        Remove
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {editTabItemsError && <p className="text-sm text-destructive">{editTabItemsError}</p>}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closeEditTabItems} disabled={editTabItemsSaving}>
+                Close
+              </Button>
+              <Button
+                type="button"
+                onClick={saveEditTabItems}
+                disabled={
+                  editTabItemsSaving ||
+                  editTabItemsLoading ||
+                  (editTabItemsDraft.length === 0 && editTabItemsRemovedIds.length === 0)
+                }
+              >
+                {editTabItemsSaving ? 'Saving…' : 'Save changes'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         <Dialog open={payModalOpen} onOpenChange={(open) => !open && closePayModal()}>
           <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
             <DialogHeader>
               <DialogTitle>Pay tab — {summary?.table_name ?? 'Open tab'}</DialogTitle>
               <DialogDescription>
-                Split payment. Total paid must equal grand total.
+                Card and transfer cannot exceed the grand total together; use cash for tips or change. Change is taken from the cash portion.
               </DialogDescription>
             </DialogHeader>
             {summary && (
@@ -619,6 +993,47 @@ return;
                     <span>Grand total</span>
                     <span>{money(summary.grand_total)}</span>
                   </div>
+                  {(() => {
+                    const c = parseFloat(cash) || 0;
+                    const d = parseFloat(card) || 0;
+                    const t = parseFloat(transfer) || 0;
+                    const g = Number(summary.grand_total) || 0;
+                    const entered = Math.round((c + d + t) * 100) / 100;
+                    const ch = Math.round((entered - g) * 100) / 100;
+                    if (c <= 0 && d <= 0 && t <= 0) return null;
+                    return (
+                      <>
+                        {d > 0 && (
+                          <div className="flex justify-between border-t border-border/60 pt-2">
+                            <span className="text-muted-foreground">Card</span>
+                            <span>{money(d)}</span>
+                          </div>
+                        )}
+                        {t > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Transfer</span>
+                            <span>{money(t)}</span>
+                          </div>
+                        )}
+                        {c > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Cash</span>
+                            <span>{money(c)}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between text-muted-foreground">
+                          <span>Total received</span>
+                          <span>{money(entered)}</span>
+                        </div>
+                        {ch > 0.01 && (
+                          <div className="flex justify-between font-medium text-emerald-600 dark:text-emerald-400">
+                            <span>Change</span>
+                            <span>- {money(ch)}</span>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
                 <div className="grid gap-3">
                   <div className="flex items-center gap-2">
@@ -640,11 +1055,14 @@ return;
                       type="number"
                       step="0.01"
                       min={0}
+                      max={maxCardAmount}
                       placeholder="0"
+                      title={`Max ${money(maxCardAmount)} (with current transfer)`}
                       value={card}
                       onChange={(e) => {
- setCard(e.target.value); setPayError(null); 
-}}
+                        setPayError(null);
+                        setCard(limitCardOrTransferValue(e.target.value, maxCardAmount));
+                      }}
                     />
                   </div>
                   <div className="flex items-center gap-2">
@@ -653,11 +1071,14 @@ return;
                       type="number"
                       step="0.01"
                       min={0}
+                      max={maxTransferAmount}
                       placeholder="0"
+                      title={`Max ${money(maxTransferAmount)} (with current card)`}
                       value={transfer}
                       onChange={(e) => {
- setTransfer(e.target.value); setPayError(null); 
-}}
+                        setPayError(null);
+                        setTransfer(limitCardOrTransferValue(e.target.value, maxTransferAmount));
+                      }}
                     />
                   </div>
                   <div className="flex items-center gap-2">

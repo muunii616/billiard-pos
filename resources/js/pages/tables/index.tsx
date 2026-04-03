@@ -31,6 +31,7 @@ import type { BreadcrumbItem } from '@/types';
 
 type SessionItem = {
   id: number;
+  product_id: number | null;
   product_name: string;
   quantity: number;
   unit_price: number;
@@ -113,6 +114,34 @@ type CheckoutSummary = {
   grand_total: number;
 };
 
+function roundMoney(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function limitCardOrTransferValue(raw: string, maxAllowed: number): string {
+  const cap = Math.max(0, roundMoney(maxAllowed));
+  if (raw === '') return '';
+  const n = parseFloat(raw);
+  if (Number.isNaN(n)) return raw;
+  if (n < 0) return '0';
+  const clamped = Math.min(n, cap);
+  if (clamped !== n) return clamped === 0 ? '' : String(clamped);
+  return raw;
+}
+
+function adminJsonHeaders(): Record<string, string> {
+  const csrfToken = document.cookie.split('; ').find((r) => r.startsWith('XSRF-TOKEN='))?.split('=')[1];
+  const headers: Record<string, string> = {
+    'X-Requested-With': 'XMLHttpRequest',
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  };
+  if (csrfToken) {
+    headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
+  }
+  return headers;
+}
+
 function formatElapsedSeconds(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   const h = Math.floor(s / 3600);
@@ -155,6 +184,16 @@ export default function TablesIndex({ tables, products, receipt: receiptProp, is
   const [addTableOpen, setAddTableOpen] = useState(false);
   const [newTableName, setNewTableName] = useState('');
   const [deleteAlertOpen, setDeleteAlertOpen] = useState(false);
+  const [cancelSessionOpen, setCancelSessionOpen] = useState(false);
+  const [cancelSessionTableId, setCancelSessionTableId] = useState<number | null>(null);
+  const [cancelSessionSubmitting, setCancelSessionSubmitting] = useState(false);
+  const [cancelSessionError, setCancelSessionError] = useState<string | null>(null);
+  const [editSessionItemsOpen, setEditSessionItemsOpen] = useState(false);
+  const [editSessionTableId, setEditSessionTableId] = useState<number | null>(null);
+  const [editSessionDraft, setEditSessionDraft] = useState<SessionItem[]>([]);
+  const [editSessionRemovedIds, setEditSessionRemovedIds] = useState<number[]>([]);
+  const [editSessionSaving, setEditSessionSaving] = useState(false);
+  const [editSessionError, setEditSessionError] = useState<string | null>(null);
   const [addItemModalOpen, setAddItemModalOpen] = useState(false);
   const [addItemTableId, setAddItemTableId] = useState<number | null>(null);
   const [addItemSearch, setAddItemSearch] = useState('');
@@ -164,6 +203,30 @@ export default function TablesIndex({ tables, products, receipt: receiptProp, is
   const [activeMobileTableId, setActiveMobileTableId] = useRemember<number | null>(null, 'tables.activeMobileTableId');
   const [tabSuccessMessage, setTabSuccessMessage] = useState<string | null>(null);
   const money = (value: number) => `$${(Number(value) || 0).toFixed(2)}`;
+  const checkoutGrandTotalNum =
+    checkoutOpen && checkoutSummary ? roundMoney(Number(checkoutSummary.grand_total)) : 0;
+  const checkoutCardNum = roundMoney(parseFloat(card) || 0);
+  const checkoutTransferNum = roundMoney(parseFloat(transfer) || 0);
+  const maxCardAmount =
+    checkoutOpen && checkoutSummary
+      ? Math.max(0, checkoutGrandTotalNum - checkoutTransferNum)
+      : 0;
+  const maxTransferAmount =
+    checkoutOpen && checkoutSummary
+      ? Math.max(0, checkoutGrandTotalNum - checkoutCardNum)
+      : 0;
+
+  useEffect(() => {
+    if (!checkoutOpen || !checkoutSummary) return;
+    const g = roundMoney(Number(checkoutSummary.grand_total));
+    const d = roundMoney(parseFloat(card) || 0);
+    const t = roundMoney(parseFloat(transfer) || 0);
+    if (d + t <= g + 0.01) return;
+    const newT = Math.min(t, g);
+    const newD = Math.min(d, Math.max(0, g - newT));
+    setCard(newD === 0 ? '' : String(newD));
+    setTransfer(newT === 0 ? '' : String(newT));
+  }, [checkoutOpen, checkoutSummary?.session_id, checkoutSummary?.grand_total]);
 
   const pageErrors = (usePage().props as { errors?: Record<string, string> }).errors ?? {};
 
@@ -445,31 +508,53 @@ return;
     const cashNum = parseFloat(cash) || 0;
     const cardNum = parseFloat(card) || 0;
     const transferNum = parseFloat(transfer) || 0;
-    const totalPaid = Math.round((cashNum + cardNum + transferNum) * 100) / 100;
-    const grandTotal = Number(checkoutSummary.grand_total);
-    const grandTotalCents = Math.round(grandTotal * 100);
-    const totalPaidCents = Math.round(totalPaid * 100);
+    const grandTotal = Math.round(Number(checkoutSummary.grand_total) * 100) / 100;
+    const cardTransferSum = Math.round((cardNum + transferNum) * 100) / 100;
+    if (cardTransferSum > grandTotal + 0.01) {
+      setCheckoutError(
+        `Card plus transfer (${money(cardTransferSum)}) cannot exceed grand total (${money(grandTotal)}). Reduce card or transfer, or use cash for the rest.`,
+      );
+      return;
+    }
 
-    if (totalPaidCents !== grandTotalCents) {
-      setCheckoutError(`Total paid (${money(totalPaid)}) must equal grand total (${money(grandTotal)}).`);
+    const totalEntered = Math.round((cashNum + cardNum + transferNum) * 100) / 100;
+    const change = Math.round((totalEntered - grandTotal) * 100) / 100;
 
+    if (totalEntered + 1e-9 < grandTotal) {
+      setCheckoutError(`Total paid (${money(totalEntered)}) must be at least grand total (${money(grandTotal)}).`);
+      return;
+    }
+
+    if (change > 0.01 && cashNum + 1e-9 < change) {
+      setCheckoutError(
+        `Change is ${money(change)}. Cash (${money(cashNum)}) must cover change when the customer is due cash back.`,
+      );
+      return;
+    }
+
+    const cashApplied = change > 0.01 ? Math.round((cashNum - change) * 100) / 100 : cashNum;
+    if (cashApplied < -0.01) {
+      setCheckoutError('Invalid cash amount.');
       return;
     }
 
     setCheckoutError(null);
     const payments: { method: string; amount: number }[] = [];
-
-    if (cashNum > 0) {
-payments.push({ method: 'cash', amount: cashNum });
-}
-
     if (cardNum > 0) {
-payments.push({ method: 'card', amount: cardNum });
-}
-
+      payments.push({ method: 'card', amount: cardNum });
+    }
     if (transferNum > 0) {
-payments.push({ method: 'transfer_qr', amount: transferNum });
-}
+      payments.push({ method: 'transfer_qr', amount: transferNum });
+    }
+    if (cashApplied > 0) {
+      payments.push({ method: 'cash', amount: cashApplied });
+    }
+
+    const paymentsSum = Math.round(payments.reduce((s, p) => s + p.amount, 0) * 100) / 100;
+    if (Math.abs(paymentsSum - grandTotal) > 0.02) {
+      setCheckoutError('Could not balance payment split. Check amounts.');
+      return;
+    }
 
     const url = tablesRoutes.end.url({ table: checkoutSummary.table_id });
     const payload: { payments: { method: string; amount: number }[]; customer_email?: string } = { payments };
@@ -500,6 +585,116 @@ payload.customer_email = customerEmail.trim();
   const handlePrintInvoice = () => {
     // Mockup: no-op or could call window.print() on the invoice content
   };
+
+  const openCancelSessionDialog = (tableId: number) => {
+    setCancelSessionTableId(tableId);
+    setCancelSessionError(null);
+    setCancelSessionOpen(true);
+  };
+
+  const confirmCancelSession = async () => {
+    if (cancelSessionTableId == null) return;
+    setCancelSessionSubmitting(true);
+    setCancelSessionError(null);
+    try {
+      const csrfToken = document.cookie.split('; ').find((r) => r.startsWith('XSRF-TOKEN='))?.split('=')[1];
+      const headers: Record<string, string> = {
+        'X-Requested-With': 'XMLHttpRequest',
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      };
+      if (csrfToken) {
+        headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
+      }
+      const res = await fetch(`/admin/tables/${cancelSessionTableId}/cancel-session`, {
+        method: 'POST',
+        headers,
+        credentials: 'same-origin',
+        body: '{}',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCancelSessionError(
+          typeof data.message === 'string' ? data.message : 'Failed to cancel session.',
+        );
+        return;
+      }
+      setCancelSessionOpen(false);
+      setCancelSessionTableId(null);
+      router.reload({ preserveScroll: true });
+    } finally {
+      setCancelSessionSubmitting(false);
+    }
+  };
+
+  const openEditSessionItems = (table: Table) => {
+    if (!table.current_session) return;
+    setEditSessionTableId(table.id);
+    setEditSessionDraft(
+      table.current_session.items.map((i) => ({
+        ...i,
+        product_id: i.product_id ?? null,
+      })),
+    );
+    setEditSessionRemovedIds([]);
+    setEditSessionError(null);
+    setEditSessionItemsOpen(true);
+  };
+
+  const closeEditSessionItems = () => {
+    setEditSessionItemsOpen(false);
+    setEditSessionTableId(null);
+    setEditSessionDraft([]);
+    setEditSessionRemovedIds([]);
+    setEditSessionError(null);
+  };
+
+  const saveEditSessionItems = async () => {
+    if (editSessionTableId == null) return;
+    setEditSessionSaving(true);
+    setEditSessionError(null);
+    const items = [
+      ...editSessionDraft.map((i) => ({
+        id: i.id,
+        quantity: Math.max(0, Math.floor(Number(i.quantity) || 0)),
+      })),
+      ...editSessionRemovedIds.map((id) => ({ id, quantity: 0 })),
+    ];
+    try {
+      const res = await fetch(`/admin/tables/${editSessionTableId}/session-items`, {
+        method: 'PUT',
+        headers: adminJsonHeaders(),
+        credentials: 'same-origin',
+        body: JSON.stringify({ items }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setEditSessionError(typeof data.message === 'string' ? data.message : 'Could not save items.');
+        return;
+      }
+      closeEditSessionItems();
+      setDetailsTable(null);
+      router.reload({ preserveScroll: true });
+    } finally {
+      setEditSessionSaving(false);
+    }
+  };
+
+  const removeEditSessionLine = (id: number) => {
+    setEditSessionDraft((d) => d.filter((x) => x.id !== id));
+    setEditSessionRemovedIds((r) => (r.includes(id) ? r : [...r, id]));
+  };
+
+  const updateEditSessionQty = (id: number, qty: number) => {
+    const q = Math.max(1, Math.floor(qty));
+    setEditSessionDraft((d) =>
+      d.map((row) =>
+        row.id === id ? { ...row, quantity: q, total_price: roundMoney(q * row.unit_price) } : row,
+      ),
+    );
+  };
+
+  // Maintenance is controlled from the Edit Table modal (admin).
 
   const handleEmailInvoice = async () => {
     if (!invoiceReceipt) {
@@ -642,10 +837,14 @@ setDetailsTable(table);
   };
   const handleSaveEdit = () => {
     if (!editTable) {
-return;
-}
+      return;
+    }
 
-    router.put(`/admin/tables/${editTable.id}`, { name: editName }, { onSuccess: () => setEditTable(null) });
+    router.put(
+      `/admin/tables/${editTable.id}`,
+      { name: editName, status: editTable.status },
+      { onSuccess: () => setEditTable(null) },
+    );
   };
   const handleDeleteTable = () => {
     if (!editTable) {
@@ -802,6 +1001,16 @@ return;
                           <Square className="h-4 w-4" />
                           End
                         </Button>
+                        {isAdmin && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5 border-rose-500/40 bg-rose-950/40 text-rose-200 hover:bg-rose-950/60"
+                            onClick={() => openCancelSessionDialog(table.id)}
+                          >
+                            Cancel
+                          </Button>
+                        )}
                       </>
                     )}
                     {isAdmin && (
@@ -943,21 +1152,108 @@ return;
                     </ul>
                   )}
                 </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setDetailsTable(null)}>Close</Button>
-                  <Button onClick={() => {
- if (detailsTable) {
-handleAddItem(detailsTable.id);
-}
-
- setDetailsTable(null); 
-}} className="gap-1.5">
+                <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
+                  <Button variant="outline" onClick={() => setDetailsTable(null)}>
+                    Close
+                  </Button>
+                  {isAdmin && detailsTable.current_session.items.length > 0 && (
+                    <Button
+                      variant="outline"
+                      className="gap-1.5"
+                      onClick={() => openEditSessionItems(detailsTable)}
+                    >
+                      <Pencil className="h-4 w-4" />
+                      Edit items
+                    </Button>
+                  )}
+                  <Button
+                    onClick={() => {
+                      if (detailsTable) {
+                        handleAddItem(detailsTable.id);
+                      }
+                      setDetailsTable(null);
+                    }}
+                    className="gap-1.5"
+                  >
                     <ShoppingCart className="h-4 w-4" />
                     Add item
                   </Button>
                 </DialogFooter>
               </div>
             )}
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={editSessionItemsOpen}
+          onOpenChange={(open) => {
+            if (!open) closeEditSessionItems();
+          }}
+        >
+          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Edit session items</DialogTitle>
+              <DialogDescription>
+                Adjust quantities or remove lines for this table session. Use <span className="font-medium">Add item</span> to add products. Timer charges are separate.
+              </DialogDescription>
+            </DialogHeader>
+            {editSessionDraft.length === 0 && (
+              <p className="text-sm text-muted-foreground">No lines to edit.</p>
+            )}
+            {editSessionDraft.length > 0 && (
+              <ul className="max-h-64 space-y-3 overflow-y-auto text-sm">
+                {editSessionDraft.map((line) => (
+                  <li
+                    key={line.id}
+                    className="flex flex-col gap-2 rounded-md border border-border/80 bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium">{line.product_name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {money(line.unit_price)} each · line {money(line.total_price)}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Label className="sr-only" htmlFor={`sess-qty-${line.id}`}>
+                        Quantity
+                      </Label>
+                      <Input
+                        id={`sess-qty-${line.id}`}
+                        type="number"
+                        min={1}
+                        className="h-9 w-20"
+                        value={line.quantity}
+                        onChange={(e) => updateEditSessionQty(line.id, Number(e.target.value) || 1)}
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => removeEditSessionLine(line.id)}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {editSessionError && <p className="text-sm text-destructive">{editSessionError}</p>}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closeEditSessionItems} disabled={editSessionSaving}>
+                Close
+              </Button>
+              <Button
+                type="button"
+                onClick={saveEditSessionItems}
+                disabled={
+                  editSessionSaving ||
+                  (editSessionDraft.length === 0 && editSessionRemovedIds.length === 0)
+                }
+              >
+                {editSessionSaving ? 'Saving…' : 'Save changes'}
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
 
@@ -1131,6 +1427,18 @@ handleAddItem(detailsTable.id);
                     placeholder="Table name"
                   />
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-status">Status</Label>
+                  <select
+                    id="edit-status"
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={editTable.status}
+                    onChange={(e) => setEditTable((prev) => (prev ? { ...prev, status: e.target.value } : prev))}
+                  >
+                    <option value="available">Available</option>
+                    <option value="maintenance">Maintenance</option>
+                  </select>
+                </div>
                 <DialogFooter className="flex flex-col gap-2 sm:flex-row">
                   <Button variant="outline" onClick={() => setEditTable(null)}>Cancel</Button>
                   <Button onClick={handleSaveEdit}>Save</Button>
@@ -1192,7 +1500,9 @@ handleAddItem(detailsTable.id);
           <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
             <DialogHeader>
               <DialogTitle>Checkout — {checkoutSummary?.table_name ?? 'Table'}</DialogTitle>
-              <DialogDescription>Split payment across cash, card, or transfer. Total paid must equal grand total.</DialogDescription>
+              <DialogDescription>
+                Card and transfer cannot exceed the grand total together; use cash for tips or change. Change is taken from the cash portion.
+              </DialogDescription>
             </DialogHeader>
             {checkoutSummary && (
               <>
@@ -1209,6 +1519,47 @@ handleAddItem(detailsTable.id);
                     <span>Grand total</span>
                     <span>{money(checkoutSummary.grand_total)}</span>
                   </div>
+                  {(() => {
+                    const c = parseFloat(cash) || 0;
+                    const d = parseFloat(card) || 0;
+                    const t = parseFloat(transfer) || 0;
+                    const g = Number(checkoutSummary.grand_total) || 0;
+                    const entered = Math.round((c + d + t) * 100) / 100;
+                    const ch = Math.round((entered - g) * 100) / 100;
+                    if (c <= 0 && d <= 0 && t <= 0) return null;
+                    return (
+                      <>
+                        {d > 0 && (
+                          <div className="flex justify-between border-t border-border/60 pt-2">
+                            <span className="text-muted-foreground">Card</span>
+                            <span>{money(d)}</span>
+                          </div>
+                        )}
+                        {t > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Transfer</span>
+                            <span>{money(t)}</span>
+                          </div>
+                        )}
+                        {c > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Cash</span>
+                            <span>{money(c)}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between text-muted-foreground">
+                          <span>Total received</span>
+                          <span>{money(entered)}</span>
+                        </div>
+                        {ch > 0.01 && (
+                          <div className="flex justify-between font-medium text-emerald-600 dark:text-emerald-400">
+                            <span>Change</span>
+                            <span>- {money(ch)}</span>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
                 <div className="grid gap-3">
                   <div className="flex items-center gap-2">
@@ -1230,11 +1581,14 @@ handleAddItem(detailsTable.id);
                       type="number"
                       step="0.01"
                       min="0"
+                      max={maxCardAmount}
                       placeholder="0"
+                      title={`Max ${money(maxCardAmount)} (with current transfer)`}
                       value={card}
                       onChange={(e) => {
- setCard(e.target.value); setCheckoutError(null); 
-}}
+                        setCheckoutError(null);
+                        setCard(limitCardOrTransferValue(e.target.value, maxCardAmount));
+                      }}
                     />
                   </div>
                   <div className="flex items-center gap-2">
@@ -1243,11 +1597,14 @@ handleAddItem(detailsTable.id);
                       type="number"
                       step="0.01"
                       min="0"
+                      max={maxTransferAmount}
                       placeholder="0"
+                      title={`Max ${money(maxTransferAmount)} (with current card)`}
                       value={transfer}
                       onChange={(e) => {
- setTransfer(e.target.value); setCheckoutError(null); 
-}}
+                        setCheckoutError(null);
+                        setTransfer(limitCardOrTransferValue(e.target.value, maxTransferAmount));
+                      }}
                     />
                   </div>
                   <div className="flex items-center gap-2">
@@ -1346,6 +1703,45 @@ handleAddItem(detailsTable.id);
             )}
           </DialogContent>
         </Dialog>
+
+        <AlertDialog
+          open={cancelSessionOpen}
+          onOpenChange={(open) => {
+            setCancelSessionOpen(open);
+            if (!open) {
+              setCancelSessionTableId(null);
+              setCancelSessionError(null);
+            }
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Cancel active session?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This stops the timer and voids session items. No receipt is created.
+                {cancelSessionTableId != null
+                  ? ` Table: ${tables.find((t) => t.id === cancelSessionTableId)?.name ?? `#${cancelSessionTableId}`}.`
+                  : ''}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            {cancelSessionError && (
+              <p className="text-sm text-destructive">{cancelSessionError}</p>
+            )}
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={cancelSessionSubmitting}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                disabled={cancelSessionSubmitting}
+                onClick={async (e) => {
+                  e.preventDefault();
+                  await confirmCancelSession();
+                }}
+              >
+                {cancelSessionSubmitting ? 'Cancelling…' : 'Confirm cancel'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </AppLayout>
   );

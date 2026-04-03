@@ -31,10 +31,15 @@ class CheckoutSessionController extends Controller
         ];
     }
 
-    public function index(): Response
+    public function index(Request $request): Response
     {
-        $checkouts = CheckoutSession::with(['gameSessions.table', 'items'])
-            ->where('status', 'open')
+        $isAdmin = $request->user()?->role === 'admin';
+        $includeAll = $isAdmin && $request->boolean('all');
+
+        // Merged source tabs are not shown as separate rows — their sessions/items moved to the target tab.
+        $checkoutsQuery = CheckoutSession::with(['gameSessions.table', 'items'])
+            ->when(! $includeAll, fn ($q) => $q->where('status', 'open'))
+            ->when($includeAll, fn ($q) => $q->where('status', '!=', 'merged'))
             ->orderByDesc('id')
             ->get()
             ->map(function (CheckoutSession $c) {
@@ -43,6 +48,7 @@ class CheckoutSessionController extends Controller
 
                 return [
                     'id' => $c->id,
+                    'status' => $c->status,
                     'created_at' => $c->created_at->toIso8601String(),
                     'table_names' => $tableNames,
                     'time_total' => $totals['time_total'],
@@ -57,9 +63,10 @@ class CheckoutSessionController extends Controller
         }
 
         return Inertia::render('checkouts/index', [
-            'checkouts' => $checkouts,
+            'checkouts' => $checkoutsQuery,
             'products' => Product::where('is_active', true)->orderBy('name')->get(['id', 'name', 'price', 'category']),
             'receipt' => $receipt,
+            'isAdmin' => $isAdmin,
         ]);
     }
 
@@ -98,6 +105,15 @@ class CheckoutSessionController extends Controller
             'time_total' => $totals['time_total'],
             'items_total' => $totals['items_total'],
             'grand_total' => $totals['grand_total'],
+            'tab_items' => $checkout->items->map(fn ($i) => [
+                'id' => $i->id,
+                'product_id' => $i->product_id,
+                'product_name' => $i->product_name,
+                'product_category' => $i->product_category,
+                'quantity' => $i->quantity,
+                'unit_price' => (float) $i->unit_price,
+                'total_price' => (float) $i->total_price,
+            ])->values()->all(),
         ]);
     }
 
@@ -209,6 +225,15 @@ class CheckoutSessionController extends Controller
             if (abs($totalPaid - $grandTotal) > 0.01) {
                 return back()->withErrors(['payments' => 'Total paid must equal grand total.']);
             }
+            $cardTransferTotal = 0;
+            foreach ($validPayments as $vp) {
+                if (($vp['method'] ?? '') === 'card' || ($vp['method'] ?? '') === 'transfer_qr') {
+                    $cardTransferTotal += $vp['amount'];
+                }
+            }
+            if ($cardTransferTotal > $grandTotal + 0.01) {
+                return back()->withErrors(['payments' => 'Card and transfer combined cannot exceed the grand total.']);
+            }
         } else {
             $validPayments = $grandTotal > 0 ? [['method' => 'cash', 'amount' => $grandTotal]] : [];
         }
@@ -224,12 +249,13 @@ class CheckoutSessionController extends Controller
         DB::transaction(function () use ($checkout, $timeTotal, $itemsTotal, $grandTotal, $validPayments, $customerEmail, $endedAt, &$receiptId) {
             $receipt = Receipt::create([
                 'checkout_session_id' => $checkout->id,
-                'receipt_number' => 'R-' . now()->format('YmdHis') . '-C' . $checkout->id,
+                'receipt_number' => 'R-'.now()->format('YmdHis').'-C'.$checkout->id,
                 'time_total' => $timeTotal,
                 'products_total' => $itemsTotal,
                 'grand_total' => $grandTotal,
                 'customer_email' => $customerEmail,
                 'paid_at' => $grandTotal > 0 ? $endedAt : null,
+                'status' => $grandTotal > 0 ? 'paid' : 'unpaid',
             ]);
             $receiptId = $receipt->id;
             foreach ($validPayments as $p) {
@@ -252,7 +278,7 @@ class CheckoutSessionController extends Controller
                 $dur = max(0, (int) $session->started_at->diffInSeconds($session->ended_at, true));
                 $lineItems[] = [
                     'type' => 'time',
-                    'description' => 'Table ' . ($session->table->name ?? '') . ' — time',
+                    'description' => 'Table '.($session->table->name ?? '').' — time',
                     'from' => $session->started_at->copy()->setTimezone(config('app.timezone'))->format('d-m-Y h:i:s A'),
                     'to' => $session->ended_at->copy()->setTimezone(config('app.timezone'))->format('d-m-Y h:i:s A'),
                     'duration' => gmdate('H:i:s', $dur),
@@ -294,6 +320,29 @@ class CheckoutSessionController extends Controller
             'line_items' => $lineItems,
             'payments' => $receipt->payments->map(fn ($p) => ['method' => $p->method, 'amount' => (float) $p->amount])->all(),
         ];
+
+        // Create receipt snapshot line items (admin-editable) if missing.
+        if ($receipt->lineItems()->count() === 0) {
+            $rows = collect($invoicePayload['line_items'])->map(function (array $li) {
+                $type = (string) ($li['type'] ?? 'product');
+                $quantity = (float) ($li['quantity'] ?? 1);
+                $unitPrice = (float) ($li['unit_price'] ?? ($li['rate'] ?? 0));
+                $subtotal = (float) ($li['subtotal'] ?? 0);
+
+                return [
+                    'type' => $type,
+                    'description' => (string) ($li['description'] ?? ''),
+                    'quantity' => $quantity,
+                    'unit_price' => $unitPrice,
+                    'subtotal' => $subtotal,
+                    'meta' => array_diff_key($li, array_flip(['type', 'description', 'quantity', 'unit_price', 'rate', 'subtotal'])),
+                ];
+            })->filter(fn ($r) => trim((string) $r['description']) !== '')->values()->all();
+
+            foreach ($rows as $r) {
+                $receipt->lineItems()->create($r);
+            }
+        }
 
         if ($request->expectsJson()) {
             return response()->json([

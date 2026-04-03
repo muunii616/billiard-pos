@@ -11,7 +11,7 @@ class ReceiptController extends Controller
 {
     public function sendEmail(Request $request, Receipt $receipt)
     {
-        $receipt->load(['session.table', 'session.items', 'checkoutSession.gameSessions.table', 'checkoutSession.gameSessions.items', 'checkoutSession.items', 'payments']);
+        $receipt->load(['lineItems', 'session.table', 'session.items', 'checkoutSession.gameSessions.table', 'checkoutSession.gameSessions.items', 'checkoutSession.items', 'payments']);
 
         if (empty($receipt->customer_email)) {
             return response()->json(['message' => 'No customer email on this receipt.'], 422);
@@ -20,6 +20,20 @@ class ReceiptController extends Controller
         $lineItems = [];
         $tableLabel = 'Open tab';
 
+        if ($receipt->lineItems && $receipt->lineItems->count() > 0) {
+            foreach ($receipt->lineItems as $li) {
+                $lineItems[] = [
+                    'description' => $li->description,
+                    'quantity' => (float) $li->quantity,
+                    'subtotal' => (float) $li->subtotal,
+                ];
+            }
+            if ($receipt->session) {
+                $tableLabel = $receipt->session->table->name ?? 'Table';
+            } elseif ($receipt->checkoutSession) {
+                $tableLabel = $receipt->checkoutSession->gameSessions->map(fn ($s) => $s->table->name ?? '')->filter()->unique()->implode(', ') ?: 'Open tab';
+            }
+        } else {
         if ($receipt->session) {
             $session = $receipt->session;
             $tableLabel = $session->table->name ?? 'Table';
@@ -65,6 +79,7 @@ class ReceiptController extends Controller
                     'subtotal' => (float) $item->total_price,
                 ];
             }
+        }
         }
 
         Mail::to($receipt->customer_email)->send(new ReceiptMail(

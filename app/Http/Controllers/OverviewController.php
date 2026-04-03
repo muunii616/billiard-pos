@@ -27,6 +27,7 @@ class OverviewController extends Controller
 
     public function __invoke(Request $request): Response
     {
+        $isAdmin = $request->user()?->role === 'admin';
         $mode = $request->query('mode', 'daily'); // daily or monthly
         $dateInput = (string) $request->query('date', now()->toDateString());
         try {
@@ -55,6 +56,8 @@ class OverviewController extends Controller
             'checkoutSession.gameSessions.items',
         ])
             ->whereBetween('paid_at', [$start, $end])
+            ->whereNull('deleted_at')
+            ->where('status', '!=', 'voided')
             ->orderByDesc('paid_at')
             ->get();
         $totalRevenue = $receipts->sum('grand_total');
@@ -134,6 +137,7 @@ class OverviewController extends Controller
                     ->all();
 
                 return [
+                    'id' => $receipt->id,
                     'invoice' => $receipt->receipt_number,
                     'status' => $receipt->paid_at ? 'Paid' : 'Unpaid',
                     'method' => empty($methods) ? '—' : implode(', ', $methods),
@@ -144,6 +148,7 @@ class OverviewController extends Controller
             ->all();
 
         return Inertia::render('overview', [
+            'isAdmin' => $isAdmin,
             'mode' => $mode,
             'date' => $date,
             'month' => $month,

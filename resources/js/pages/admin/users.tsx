@@ -3,6 +3,13 @@ import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -45,10 +52,21 @@ const breadcrumbs: BreadcrumbItem[] = [
   },
 ];
 
+function userInitials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase() || '?';
+}
+
 export default function AdminUsers({ users }: Props) {
   const { auth } = usePage().props as { auth: { user: { id: number } } };
   const currentUserId = auth.user.id;
   const [createOpen, setCreateOpen] = useState(false);
+  const [editUser, setEditUser] = useState<User | null>(null);
 
   const { data, setData, post, reset, processing, errors } = useForm({
     name: '',
@@ -57,6 +75,13 @@ export default function AdminUsers({ users }: Props) {
     password: '',
     password_confirmation: '',
     role: 'employee',
+  });
+
+  const editForm = useForm({
+    name: '',
+    email: '',
+    phone: '',
+    role: 'employee' as 'admin' | 'employee',
   });
 
   const handleCreate = (e: React.FormEvent) => {
@@ -69,38 +94,29 @@ export default function AdminUsers({ users }: Props) {
     });
   };
 
-  const handleEditRole = (user: User) => {
-    const role = window.prompt('Role (admin or employee)', user.role) ?? user.role;
-
-    if (!['admin', 'employee'].includes(role)) {
-      alert('Role must be admin or employee.');
-
-      return;
-    }
-
-    router.put(`/admin/users/${user.id}`, { role });
+  const openEdit = (user: User) => {
+    setEditUser(user);
+    editForm.setData({
+      name: user.name,
+      email: user.email,
+      phone: user.phone ?? '',
+      role: user.role === 'admin' ? 'admin' : 'employee',
+    });
   };
 
-  const handleEdit = (user: User) => {
-    const name = window.prompt('Name', user.name);
+  const closeEdit = () => {
+    setEditUser(null);
+    editForm.reset();
+    editForm.clearErrors();
+  };
 
-    if (name === null) {
-      return;
-    }
-
-    const email = window.prompt('Email', user.email);
-
-    if (email === null) {
-      return;
-    }
-
-    const phone = window.prompt('Phone', user.phone ?? '');
-
-    if (phone === null) {
-      return;
-    }
-
-    router.put(`/admin/users/${user.id}`, { name, email, phone: phone || null });
+  const handleEditSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editUser) return;
+    editForm.put(`/admin/users/${editUser.id}`, {
+      preserveScroll: true,
+      onSuccess: () => closeEdit(),
+    });
   };
 
   const handleDelete = (user: User) => {
@@ -120,42 +136,71 @@ export default function AdminUsers({ users }: Props) {
   return (
     <AppLayout breadcrumbs={breadcrumbs}>
       <Head title="Users" />
-      <div className="flex flex-1 flex-col gap-4 rounded-xl p-4">
-        <div className="rounded-xl border border-sidebar-border/70 bg-background p-4 shadow-sm dark:border-sidebar-border">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="text-sm font-medium text-muted-foreground">Users</div>
-            <Button className="rounded-full px-4" onClick={() => setCreateOpen(true)}>
-              + Add user
-            </Button>
+      <div className="flex flex-1 flex-col gap-6 rounded-xl p-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">Users</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Manage staff accounts and roles for your venue.
+            </p>
           </div>
-          <div className="space-y-2 text-sm">
-            {users.length === 0 && <div className="text-muted-foreground">No users yet.</div>}
+          <Button className="w-full shrink-0 sm:w-auto" onClick={() => setCreateOpen(true)}>
+            + Add user
+          </Button>
+        </div>
+
+        {users.length === 0 ? (
+          <Card className="border-dashed border-sidebar-border/70 dark:border-sidebar-border">
+            <CardContent className="py-16 text-center text-sm text-muted-foreground">
+              No users yet. Add your first staff member to get started.
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {users.map((user) => (
-              <div
+              <Card
                 key={user.id}
-                className="flex items-center gap-3 rounded-lg border border-border/60 px-3 py-2"
+                className="border-sidebar-border/70 shadow-sm transition-shadow hover:shadow-md dark:border-sidebar-border"
               >
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">{user.name}</span>
-                    <Badge variant="outline" className="text-xs">
-                      {user.role}
-                    </Badge>
-                    {user.id === currentUserId && (
-                      <span className="text-xs text-muted-foreground">(you)</span>
-                    )}
+                <CardHeader className="pb-3">
+                  <div className="flex items-start gap-3">
+                    <div
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/15 text-sm font-semibold text-primary"
+                      aria-hidden
+                    >
+                      {userInitials(user.name)}
+                    </div>
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <CardTitle className="truncate text-base">{user.name}</CardTitle>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge
+                          variant={user.role === 'admin' ? 'default' : 'secondary'}
+                          className="text-xs capitalize"
+                        >
+                          {user.role}
+                        </Badge>
+                        {user.id === currentUserId && (
+                          <span className="text-xs text-muted-foreground">(you)</span>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-xs text-muted-foreground">{user.email}</div>
-                  {user.phone && (
-                    <div className="text-xs text-muted-foreground">Phone: {user.phone}</div>
+                </CardHeader>
+                <CardContent className="space-y-1 pb-2 pt-0 text-sm text-muted-foreground">
+                  <p className="truncate" title={user.email}>
+                    {user.email}
+                  </p>
+                  {user.phone ? (
+                    <p className="truncate" title={user.phone}>
+                      {user.phone}
+                    </p>
+                  ) : (
+                    <p className="text-xs italic opacity-80">No phone on file</p>
                   )}
-                </div>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="outline" onClick={() => handleEdit(user)}>
+                </CardContent>
+                <CardFooter className="mt-auto flex flex-wrap gap-2 border-t border-border/60 pt-4">
+                  <Button size="sm" variant="outline" onClick={() => openEdit(user)}>
                     Edit
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => handleEditRole(user)}>
-                    Change role
                   </Button>
                   <Button
                     size="sm"
@@ -165,11 +210,11 @@ export default function AdminUsers({ users }: Props) {
                   >
                     Delete
                   </Button>
-                </div>
-              </div>
+                </CardFooter>
+              </Card>
             ))}
           </div>
-        </div>
+        )}
       </div>
 
       <Dialog
@@ -255,6 +300,99 @@ export default function AdminUsers({ users }: Props) {
               </Button>
               <Button type="submit" disabled={processing}>
                 Add user
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={editUser !== null}
+        onOpenChange={(open) => {
+          if (!open) closeEdit();
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit user</DialogTitle>
+            <DialogDescription>
+              Update profile details and role for {editUser?.name ?? 'this user'}.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleEditSubmit} className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1 sm:col-span-2">
+                <Label htmlFor="edit-name" className="text-xs">
+                  Name
+                </Label>
+                <Input
+                  id="edit-name"
+                  value={editForm.data.name}
+                  onChange={(e) => editForm.setData('name', e.target.value)}
+                  required
+                />
+                {editForm.errors.name && (
+                  <span className="text-xs text-destructive">{editForm.errors.name}</span>
+                )}
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <Label htmlFor="edit-email" className="text-xs">
+                  Email
+                </Label>
+                <Input
+                  id="edit-email"
+                  type="email"
+                  value={editForm.data.email}
+                  onChange={(e) => editForm.setData('email', e.target.value)}
+                  required
+                />
+                {editForm.errors.email && (
+                  <span className="text-xs text-destructive">{editForm.errors.email}</span>
+                )}
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <Label htmlFor="edit-phone" className="text-xs">
+                  Phone
+                </Label>
+                <Input
+                  id="edit-phone"
+                  value={editForm.data.phone}
+                  onChange={(e) => editForm.setData('phone', e.target.value)}
+                  placeholder="Optional"
+                />
+                {editForm.errors.phone && (
+                  <span className="text-xs text-destructive">{editForm.errors.phone}</span>
+                )}
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <Label className="text-xs">Role</Label>
+                <Select
+                  value={editForm.data.role}
+                  onValueChange={(value) => editForm.setData('role', value as 'admin' | 'employee')}
+                  disabled={editUser?.id === currentUserId}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="employee">Employee</SelectItem>
+                    <SelectItem value="admin">Admin</SelectItem>
+                  </SelectContent>
+                </Select>
+                {editUser?.id === currentUserId && (
+                  <p className="text-xs text-muted-foreground">You cannot change your own role.</p>
+                )}
+                {editForm.errors.role && (
+                  <span className="text-xs text-destructive">{editForm.errors.role}</span>
+                )}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closeEdit}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={editForm.processing}>
+                Save changes
               </Button>
             </DialogFooter>
           </form>

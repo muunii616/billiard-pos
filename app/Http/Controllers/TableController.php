@@ -7,6 +7,7 @@ use App\Models\CheckoutSession;
 use App\Models\GameSession;
 use App\Models\Product;
 use App\Models\Receipt;
+use App\Models\ReceiptLineItem;
 use App\Models\ReceiptPayment;
 use App\Models\SessionItem;
 use Illuminate\Http\Request;
@@ -54,6 +55,7 @@ class TableController extends Controller
                     }
                     $sessionItems = $currentSession->items->map(fn ($item) => [
                         'id' => $item->id,
+                        'product_id' => $item->product_id,
                         'product_name' => $item->product_name ?? $item->product?->name ?? 'Deleted product',
                         'quantity' => $item->quantity,
                         'unit_price' => (float) $item->unit_price,
@@ -233,6 +235,15 @@ class TableController extends Controller
             if (abs($totalPaid - $grandTotal) > 0.01) {
                 return back()->withErrors(['payments' => 'Total paid must equal grand total.']);
             }
+            $cardTransferTotal = 0;
+            foreach ($validPayments as $vp) {
+                if (($vp['method'] ?? '') === 'card' || ($vp['method'] ?? '') === 'transfer_qr') {
+                    $cardTransferTotal += $vp['amount'];
+                }
+            }
+            if ($cardTransferTotal > $grandTotal + 0.01) {
+                return back()->withErrors(['payments' => 'Card and transfer combined cannot exceed the grand total.']);
+            }
         } else {
             $validPayments = $grandTotal > 0 ? [['method' => 'cash', 'amount' => $grandTotal]] : [];
         }
@@ -265,6 +276,7 @@ class TableController extends Controller
                 'grand_total' => $grandTotal,
                 'customer_email' => $customerEmail,
                 'paid_at' => $grandTotal > 0 ? $endedAt : null,
+                'status' => $grandTotal > 0 ? 'paid' : 'unpaid',
             ]);
 
             $receiptId = $receipt->id;
@@ -324,6 +336,29 @@ class TableController extends Controller
                 'unit_price' => (float) $item->unit_price,
                 'subtotal' => (float) $item->total_price,
             ];
+        }
+
+        // Create receipt snapshot line items (admin-editable) if missing.
+        if ($receipt->lineItems()->count() === 0) {
+            $rows = collect($invoicePayload['line_items'])->map(function (array $li) {
+                $type = (string) ($li['type'] ?? 'product');
+                $quantity = (float) ($li['quantity'] ?? 1);
+                $unitPrice = (float) ($li['unit_price'] ?? ($li['rate'] ?? 0));
+                $subtotal = (float) ($li['subtotal'] ?? 0);
+
+                return [
+                    'type' => $type,
+                    'description' => (string) ($li['description'] ?? ''),
+                    'quantity' => $quantity,
+                    'unit_price' => $unitPrice,
+                    'subtotal' => $subtotal,
+                    'meta' => array_diff_key($li, array_flip(['type', 'description', 'quantity', 'unit_price', 'rate', 'subtotal'])),
+                ];
+            })->filter(fn ($r) => trim((string) $r['description']) !== '')->values()->all();
+
+            foreach ($rows as $r) {
+                $receipt->lineItems()->create($r);
+            }
         }
 
         return redirect()->back()->with('session_ended', $session->id)->with('receipt', $invoicePayload);

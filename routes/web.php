@@ -1,7 +1,10 @@
 <?php
 
 use App\Http\Controllers\Admin\BilliardTableController;
+use App\Http\Controllers\Admin\CheckoutAdminController;
 use App\Http\Controllers\Admin\ProductController as AdminProductController;
+use App\Http\Controllers\Admin\ReceiptAdminController;
+use App\Http\Controllers\Admin\TableAdminController;
 use App\Http\Controllers\Admin\UserController as AdminUserController;
 use App\Http\Controllers\CheckoutSessionController;
 use App\Http\Controllers\DashboardController;
@@ -55,6 +58,21 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('admin/users', [AdminUserController::class, 'store'])->name('admin.users.store');
         Route::put('admin/users/{user}', [AdminUserController::class, 'update'])->name('admin.users.update');
         Route::delete('admin/users/{user}', [AdminUserController::class, 'destroy'])->name('admin.users.destroy');
+
+        // Admin actions on existing pages
+        Route::put('admin/checkouts/{checkout}/items', [CheckoutAdminController::class, 'updateItems'])->name('admin.checkouts.items.update');
+        Route::post('admin/checkouts/{checkout}/void', [CheckoutAdminController::class, 'void'])->name('admin.checkouts.void');
+        Route::post('admin/checkouts/{checkout}/reopen', [CheckoutAdminController::class, 'reopen'])->name('admin.checkouts.reopen');
+
+        Route::get('admin/receipts/{receipt}', [ReceiptAdminController::class, 'show'])->name('admin.receipts.show');
+        Route::put('admin/receipts/{receipt}', [ReceiptAdminController::class, 'update'])->name('admin.receipts.update');
+        Route::post('admin/receipts/{receipt}/void', [ReceiptAdminController::class, 'void'])->name('admin.receipts.void');
+        Route::delete('admin/receipts/{receipt}', [ReceiptAdminController::class, 'destroy'])->name('admin.receipts.destroy');
+        Route::get('admin/overview/export/csv', [ReceiptAdminController::class, 'exportCsv'])->name('admin.overview.export.csv');
+
+        Route::post('admin/tables/{table}/cancel-session', [TableAdminController::class, 'cancelSession'])->name('admin.tables.cancel-session');
+        Route::put('admin/tables/{table}/session-items', [TableAdminController::class, 'updateSessionItems'])->name('admin.tables.session-items.update');
+        Route::post('admin/tables/{table}/maintenance', [TableAdminController::class, 'setMaintenance'])->name('admin.tables.maintenance');
     });
 });
 

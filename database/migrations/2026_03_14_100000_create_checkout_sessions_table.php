@@ -10,7 +10,7 @@ return new class extends Migration
     {
         Schema::create('checkout_sessions', function (Blueprint $table) {
             $table->id();
-            $table->string('status')->default('open'); // open, completed
+            $table->string('status')->default('open'); // open, completed, voided, merged
             $table->timestamp('completed_at')->nullable();
             $table->timestamps();
         });

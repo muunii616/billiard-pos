@@ -1,10 +1,27 @@
-import { Head, router } from '@inertiajs/react';
+import { Head, router, usePage } from '@inertiajs/react';
 import { CalendarDays } from 'lucide-react';
 import { useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis } from 'recharts';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import type {
   ChartConfig} from '@/components/ui/chart';
 import {
@@ -19,13 +36,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import {
   Table,
   TableBody,
@@ -47,6 +57,7 @@ type Summary = {
 };
 
 type Props = {
+  isAdmin?: boolean;
   mode: 'daily' | 'monthly';
   date: string;
   month: string;
@@ -57,6 +68,7 @@ type Props = {
     monthly_income: { month: string; income: number }[];
   };
   invoices: {
+    id: number;
     invoice: string;
     status: string;
     method: string;
@@ -72,10 +84,85 @@ const breadcrumbs: BreadcrumbItem[] = [
   },
 ];
 
-export default function Overview({ mode, date, month, summary, charts, invoices, selected_year }: Props) {
+type AdminReceipt = {
+  id: number;
+  receipt_number: string;
+  status: 'paid' | 'unpaid' | 'voided';
+  paid_at: string | null;
+  customer_email: string | null;
+  line_items: {
+    id: number;
+    type: 'time' | 'product' | 'adjustment';
+    description: string;
+    quantity: number;
+    unit_price: number;
+    subtotal: number;
+  }[];
+  payments: { id: number; method: 'cash' | 'card' | 'transfer_qr'; amount: number }[];
+};
+
+export default function Overview({ isAdmin = false, mode, date, month, summary, charts, invoices, selected_year }: Props) {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [monthlyYear, setMonthlyYear] = useState<number>(() => Number(month.slice(0, 4)) || new Date().getFullYear());
   const money = (value: number) => `$${(Number(value) || 0).toFixed(2)}`;
+  const { auth } = usePage().props as { auth?: { user?: { role?: string } } };
+  const adminEnabled = isAdmin || auth?.user?.role === 'admin';
+
+  const [receiptOpen, setReceiptOpen] = useState(false);
+  const [receiptLoading, setReceiptLoading] = useState(false);
+  const [receiptError, setReceiptError] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<AdminReceipt | null>(null);
+  const [editCustomerEmail, setEditCustomerEmail] = useState('');
+  const [editStatus, setEditStatus] = useState<'paid' | 'unpaid' | 'voided'>('paid');
+
+  const openReceipt = async (receiptId: number) => {
+    if (!adminEnabled) return;
+    setReceiptOpen(true);
+    setReceiptLoading(true);
+    setReceiptError(null);
+    try {
+      const res = await fetch(`/admin/receipts/${receiptId}`, { headers: { Accept: 'application/json' } });
+      if (!res.ok) throw new Error('Failed to load receipt.');
+      const data = (await res.json()) as AdminReceipt;
+      setReceipt(data);
+      setEditCustomerEmail(data.customer_email ?? '');
+      setEditStatus(data.status);
+    } catch (e) {
+      setReceiptError(e instanceof Error ? e.message : 'Failed to load receipt.');
+    } finally {
+      setReceiptLoading(false);
+    }
+  };
+
+  const saveReceiptBasics = async () => {
+    if (!receipt) return;
+    setReceiptError(null);
+    try {
+      const csrfToken = document.cookie.split('; ').find((r) => r.startsWith('XSRF-TOKEN='))?.split('=')[1];
+      const headers: Record<string, string> = {
+        'X-Requested-With': 'XMLHttpRequest',
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      };
+      if (csrfToken) headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
+      const res = await fetch(`/admin/receipts/${receipt.id}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          customer_email: editCustomerEmail.trim() || null,
+          status: editStatus,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || 'Failed to save receipt.');
+      }
+      // Refresh the page data so invoices + charts reflect voiding changes.
+      router.reload({ preserveScroll: true });
+    } catch (e) {
+      setReceiptError(e instanceof Error ? e.message : 'Failed to save receipt.');
+    }
+  };
 
   const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const salesColorMap: Record<string, string> = {
@@ -365,7 +452,21 @@ setMonthlyYear(Number(month.slice(0, 4)) || new Date().getFullYear());
 
         <Card className="border-sidebar-border/70 bg-background py-4 dark:border-sidebar-border">
           <CardHeader className="px-4 pb-0">
-            <CardTitle className="text-sm font-semibold">Invoices</CardTitle>
+            <div className="flex items-center justify-between gap-3">
+              <CardTitle className="text-sm font-semibold">Invoices</CardTitle>
+              {adminEnabled && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    const params = mode === 'daily' ? `mode=daily&date=${encodeURIComponent(date)}` : `mode=monthly&month=${encodeURIComponent(month)}&date=${encodeURIComponent(date)}`;
+                    window.open(`/admin/overview/export/csv?${params}`, '_blank');
+                  }}
+                >
+                  Export CSV
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent className="px-4">
             <Table>
@@ -375,12 +476,13 @@ setMonthlyYear(Number(month.slice(0, 4)) || new Date().getFullYear());
                   <TableHead>Status</TableHead>
                   <TableHead>Method</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
+                  {adminEnabled && <TableHead className="text-right">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {invoices.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-muted-foreground">
+                    <TableCell colSpan={adminEnabled ? 5 : 4} className="text-muted-foreground">
                       No invoices for this period.
                     </TableCell>
                   </TableRow>
@@ -391,6 +493,13 @@ setMonthlyYear(Number(month.slice(0, 4)) || new Date().getFullYear());
                     <TableCell>{row.status}</TableCell>
                     <TableCell>{row.method}</TableCell>
                     <TableCell className="text-right">{money(Number(row.amount) || 0)}</TableCell>
+                    {adminEnabled && (
+                      <TableCell className="text-right">
+                        <Button size="sm" variant="outline" onClick={() => openReceipt(row.id)}>
+                          Edit
+                        </Button>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>
@@ -409,6 +518,70 @@ setMonthlyYear(Number(month.slice(0, 4)) || new Date().getFullYear());
           </CardContent>
         </Card>
       </div>
+
+      <Dialog
+        open={receiptOpen}
+        onOpenChange={(open) => {
+          setReceiptOpen(open);
+          if (!open) {
+            setReceipt(null);
+            setReceiptError(null);
+            setReceiptLoading(false);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit receipt</DialogTitle>
+            <DialogDescription>
+              Admin-only. You can void/unvoid a receipt and update customer email.
+            </DialogDescription>
+          </DialogHeader>
+          {receiptLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+          {receiptError && <p className="text-sm text-destructive">{receiptError}</p>}
+          {receipt && (
+            <div className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-1 sm:col-span-2">
+                  <Label className="text-xs">Receipt #</Label>
+                  <Input value={receipt.receipt_number} disabled />
+                </div>
+                <div className="space-y-1 sm:col-span-2">
+                  <Label className="text-xs">Customer email</Label>
+                  <Input
+                    type="email"
+                    value={editCustomerEmail}
+                    onChange={(e) => setEditCustomerEmail(e.target.value)}
+                    placeholder="Optional"
+                  />
+                </div>
+                <div className="space-y-1 sm:col-span-2">
+                  <Label className="text-xs">Status</Label>
+                  <Select value={editStatus} onValueChange={(v) => setEditStatus(v as 'paid' | 'unpaid' | 'voided')}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="paid">Paid</SelectItem>
+                      <SelectItem value="unpaid">Unpaid</SelectItem>
+                      <SelectItem value="voided">Voided</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setReceiptOpen(false)}>
+                  Close
+                </Button>
+                <Button onClick={saveReceiptBasics}>
+                  Save
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </AppLayout>
   );
 }
