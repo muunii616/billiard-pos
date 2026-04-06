@@ -34,6 +34,7 @@ type Props = {
   products: Product[];
   openCheckouts: { id: number; label: string }[];
   runningTables: { id: number; name: string; status: string }[];
+  isAdmin?: boolean;
 };
 
 type CartItem = {
@@ -54,7 +55,7 @@ const breadcrumbs: BreadcrumbItem[] = [
   },
 ];
 
-export default function AdminProducts({ products, openCheckouts, runningTables }: Props) {
+export default function AdminProducts({ products, openCheckouts, runningTables, isAdmin = false }: Props) {
   const DEFAULT_CATEGORIES = ['Drinks', 'Snacks', 'Sets'] as const;
   const money = (value: number) => `$${(Number(value) || 0).toFixed(2)}`;
 
@@ -357,9 +358,11 @@ export default function AdminProducts({ products, openCheckouts, runningTables }
         <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-sidebar-border/70 bg-background p-4 shadow-sm dark:border-sidebar-border">
           <div className="mb-3 flex items-center justify-between">
             <div className="text-sm font-medium text-muted-foreground">Products POS</div>
-            <Button className="rounded-full px-4" onClick={() => setCreateOpen(true)}>
-              + Add product
-            </Button>
+            {isAdmin && (
+              <Button className="rounded-full px-4" onClick={() => setCreateOpen(true)}>
+                + Add product
+              </Button>
+            )}
           </div>
 
           <div className="min-h-0 flex-1 overflow-hidden">
@@ -659,92 +662,94 @@ export default function AdminProducts({ products, openCheckouts, runningTables }
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={createOpen}
-        onOpenChange={(open) => {
-          setCreateOpen(open);
-          if (!open) {
-            reset();
-            setCreateCategoryMode('existing');
-            setSelectedCreateCategory('Snacks');
-            setNewCreateCategory('');
-          }
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add product</DialogTitle>
-            <DialogDescription>Create a new product for the menu and checkout screens.</DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleCreate} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Name</label>
-              <Input value={data.name} onChange={(e) => setData('name', e.target.value)} required />
-              {errors.name && <p className="text-xs text-destructive">{errors.name}</p>}
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Category</label>
-              <Select
-                value={createCategoryMode === 'new' ? '__new__' : selectedCreateCategory}
-                onValueChange={(value) => {
-                  if (value === '__new__') {
-                    setCreateCategoryMode('new');
-                    setData('category', newCreateCategory.trim());
-                    return;
-                  }
-                  setCreateCategoryMode('existing');
-                  setSelectedCreateCategory(value);
-                  setData('category', value);
-                }}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select category" />
-                </SelectTrigger>
-                <SelectContent>
-                  {categoryOptions.map((category) => (
-                    <SelectItem key={category} value={category}>
-                      {category}
-                    </SelectItem>
-                  ))}
-                  <SelectItem value="__new__">+ Create new category</SelectItem>
-                </SelectContent>
-              </Select>
-              {createCategoryMode === 'new' && (
-                <Input
-                  value={newCreateCategory}
-                  onChange={(e) => {
-                    setNewCreateCategory(e.target.value);
-                    setData('category', e.target.value.trim());
+      {isAdmin && (
+        <Dialog
+          open={createOpen}
+          onOpenChange={(open) => {
+            setCreateOpen(open);
+            if (!open) {
+              reset();
+              setCreateCategoryMode('existing');
+              setSelectedCreateCategory('Snacks');
+              setNewCreateCategory('');
+            }
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Add product</DialogTitle>
+              <DialogDescription>Create a new product for the menu and checkout screens.</DialogDescription>
+            </DialogHeader>
+            <form onSubmit={handleCreate} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Name</label>
+                <Input value={data.name} onChange={(e) => setData('name', e.target.value)} required />
+                {errors.name && <p className="text-xs text-destructive">{errors.name}</p>}
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Category</label>
+                <Select
+                  value={createCategoryMode === 'new' ? '__new__' : selectedCreateCategory}
+                  onValueChange={(value) => {
+                    if (value === '__new__') {
+                      setCreateCategoryMode('new');
+                      setData('category', newCreateCategory.trim());
+                      return;
+                    }
+                    setCreateCategoryMode('existing');
+                    setSelectedCreateCategory(value);
+                    setData('category', value);
                   }}
-                  placeholder="New category name"
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categoryOptions.map((category) => (
+                      <SelectItem key={category} value={category}>
+                        {category}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value="__new__">+ Create new category</SelectItem>
+                  </SelectContent>
+                </Select>
+                {createCategoryMode === 'new' && (
+                  <Input
+                    value={newCreateCategory}
+                    onChange={(e) => {
+                      setNewCreateCategory(e.target.value);
+                      setData('category', e.target.value.trim());
+                    }}
+                    placeholder="New category name"
+                    required
+                  />
+                )}
+                {errors.category && <p className="text-xs text-destructive">{errors.category}</p>}
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Price</label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={data.price}
+                  onChange={(e) => setData('price', e.target.value)}
                   required
                 />
-              )}
-              {errors.category && <p className="text-xs text-destructive">{errors.category}</p>}
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Price</label>
-              <Input
-                type="number"
-                step="0.01"
-                min="0"
-                value={data.price}
-                onChange={(e) => setData('price', e.target.value)}
-                required
-              />
-              {errors.price && <p className="text-xs text-destructive">{errors.price}</p>}
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={processing}>
-                Add product
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+                {errors.price && <p className="text-xs text-destructive">{errors.price}</p>}
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={processing}>
+                  Add product
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      )}
     </AppLayout>
   );
 }

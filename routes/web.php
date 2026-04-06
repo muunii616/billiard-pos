@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Admin\BilliardTableController;
+use App\Http\Controllers\Admin\CashSessionAdminController;
 use App\Http\Controllers\Admin\CheckoutAdminController;
 use App\Http\Controllers\Admin\ProductController as AdminProductController;
 use App\Http\Controllers\Admin\ReceiptAdminController;
@@ -10,6 +11,7 @@ use App\Http\Controllers\CheckoutSessionController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\OverviewController;
 use App\Http\Controllers\ReceiptController;
+use App\Http\Controllers\RegisterController;
 use App\Http\Controllers\TableController;
 use Illuminate\Support\Facades\Route;
 use Laravel\Fortify\Features;
@@ -22,6 +24,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('dashboard', DashboardController::class)->name('dashboard');
 
     Route::get('overview', OverviewController::class)->name('overview');
+    Route::get('cash-register', RegisterController::class)->name('cash-register.index');
+    Route::get('admin/products', [AdminProductController::class, 'index'])->name('admin.products.index');
 
     Route::get('tables', [TableController::class, 'index'])->name('tables.index');
     Route::post('tables/{table}/start', [TableController::class, 'start'])->name('tables.start');
@@ -41,10 +45,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('checkouts/{checkout}/complete', [CheckoutSessionController::class, 'complete'])->name('checkouts.complete');
     Route::post('checkouts/merge', [CheckoutSessionController::class, 'merge'])->name('checkouts.merge');
     Route::post('receipts/{receipt}/send-email', [ReceiptController::class, 'sendEmail'])->name('receipts.send-email');
+    Route::get('admin/cash/current', [CashSessionAdminController::class, 'current'])->name('admin.cash.current');
+    Route::post('admin/cash/open', [CashSessionAdminController::class, 'open'])->name('admin.cash.open');
+    Route::post('admin/cash/close', [CashSessionAdminController::class, 'close'])->name('admin.cash.close');
+    Route::get('admin/cash/{cashSession}/receipt', [CashSessionAdminController::class, 'receipt'])->name('admin.cash.receipt');
 
     // Admin-only routes will use the "role:admin" middleware.
     Route::middleware('role:admin')->group(function () {
-        Route::get('admin/products', [AdminProductController::class, 'index'])->name('admin.products.index');
         Route::post('admin/products', [AdminProductController::class, 'store'])->name('admin.products.store');
         Route::put('admin/products/{product}', [AdminProductController::class, 'update'])->name('admin.products.update');
         Route::delete('admin/products/{product}', [AdminProductController::class, 'destroy'])->name('admin.products.destroy');
@@ -73,6 +80,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('admin/tables/{table}/cancel-session', [TableAdminController::class, 'cancelSession'])->name('admin.tables.cancel-session');
         Route::put('admin/tables/{table}/session-items', [TableAdminController::class, 'updateSessionItems'])->name('admin.tables.session-items.update');
         Route::post('admin/tables/{table}/maintenance', [TableAdminController::class, 'setMaintenance'])->name('admin.tables.maintenance');
+
     });
 });
 

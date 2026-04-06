@@ -101,7 +101,16 @@ type AdminReceipt = {
   payments: { id: number; method: 'cash' | 'card' | 'transfer_qr'; amount: number }[];
 };
 
-export default function Overview({ isAdmin = false, mode, date, month, summary, charts, invoices, selected_year }: Props) {
+export default function Overview({
+  isAdmin = false,
+  mode,
+  date,
+  month,
+  summary,
+  charts,
+  invoices,
+  selected_year,
+}: Props) {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [monthlyYear, setMonthlyYear] = useState<number>(() => Number(month.slice(0, 4)) || new Date().getFullYear());
   const money = (value: number) => `$${(Number(value) || 0).toFixed(2)}`;

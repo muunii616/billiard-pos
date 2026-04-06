@@ -45,21 +45,28 @@ export function AppSidebar() {
     const page = usePage();
     const isAdmin = (page.props as any)?.auth?.user?.role === 'admin';
 
-    const navItems: NavItem[] = isAdmin
-        ? [
-              ...mainNavItems,
-              {
-                  title: 'Products',
-                  href: '/admin/products',
-                  icon: LayoutGrid,
-              },
-              {
-                  title: 'Users',
-                  href: '/admin/users',
-                  icon: Users,
-              },
-          ]
-        : mainNavItems;
+    const navItems: NavItem[] = [
+        ...mainNavItems,
+        {
+            title: 'Register',
+            href: '/cash-register',
+            icon: Wallet,
+        },
+        {
+            title: 'Products',
+            href: '/admin/products',
+            icon: LayoutGrid,
+        },
+        ...(isAdmin
+            ? [
+                  {
+                      title: 'Users',
+                      href: '/admin/users',
+                      icon: Users,
+                  },
+              ]
+            : []),
+    ];
 
     return (
         <Sidebar collapsible="icon" variant="inset">

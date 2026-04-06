@@ -56,6 +56,7 @@ class ProductController extends Controller
             'products' => $products,
             'openCheckouts' => $openCheckouts,
             'runningTables' => $runningTables,
+            'isAdmin' => auth()->user()?->role === 'admin',
         ]);
     }
 

@@ -554,7 +554,9 @@ return;
     if (deleteTabId == null) return;
     const res = await fetch(`/admin/checkouts/${deleteTabId}/void`, {
       method: 'POST',
-      headers: { 'X-Requested-With': 'XMLHttpRequest', Accept: 'application/json' },
+      headers: adminJsonHeaders(),
+      credentials: 'same-origin',
+      body: '{}',
     });
     const data = await res.json().catch(() => ({}));
     setDeleteTabConfirmOpen(false);
@@ -570,7 +572,9 @@ return;
     if (reopenTabId == null) return;
     const res = await fetch(`/admin/checkouts/${reopenTabId}/reopen`, {
       method: 'POST',
-      headers: { 'X-Requested-With': 'XMLHttpRequest', Accept: 'application/json' },
+      headers: adminJsonHeaders(),
+      credentials: 'same-origin',
+      body: '{}',
     });
     const data = await res.json().catch(() => ({}));
     setReopenTabConfirmOpen(false);
