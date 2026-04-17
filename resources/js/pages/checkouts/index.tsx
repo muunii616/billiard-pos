@@ -210,6 +210,15 @@ setPayError(pageErrors.payments);
 }
   }, [payModalOpen, pageErrors.payments]);
 
+  useEffect(() => {
+    router.get('/checkouts', showAll ? { all: 1 } : {}, {
+      preserveState: true,
+      preserveScroll: true,
+      replace: true,
+      only: ['checkouts'],
+    });
+  }, [showAll]);
+
   const openPayModal = (id: number) => {
     setPayCheckoutId(id);
     setPayError(null);
@@ -288,7 +297,7 @@ throw new Error('Could not load summary');
         return;
       }
       closeEditTabItems();
-      router.reload({ preserveScroll: true });
+      router.reload();
     } finally {
       setEditTabItemsSaving(false);
     }
@@ -374,16 +383,8 @@ payload.customer_email = customerEmail.trim();
 
     setSubmitting(true);
     router.post(`/checkouts/${payCheckoutId}/complete`, payload, {
-      onSuccess: (visit: { page?: { props?: { errors?: Record<string, string> } } }) => {
+      onSuccess: () => {
         setSubmitting(false);
-        const err = visit?.page?.props?.errors?.payments;
-
-        if (err) {
-          setPayError(err);
-
-          return;
-        }
-
         closePayModal();
       },
       onError: () => setSubmitting(false),
@@ -1070,7 +1071,7 @@ return;
                     />
                   </div>
                   <div className="flex items-center gap-2">
-                    <Label className="w-24 shrink-0">Transfer (QR)</Label>
+                    <Label className="w-24 shrink-0">Transfer</Label>
                     <Input
                       type="number"
                       step="0.01"
@@ -1094,10 +1095,6 @@ return;
                       onChange={(e) => setCustomerEmail(e.target.value)}
                     />
                   </div>
-                </div>
-                <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-muted-foreground/40 bg-muted/30 p-6 text-center text-sm text-muted-foreground">
-                  <span className="font-medium">QR Code placeholder</span>
-                  <span className="text-xs">Scan to pay via transfer</span>
                 </div>
                 {payError && <p className="text-sm text-destructive">{payError}</p>}
                 <DialogFooter>

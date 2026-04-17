@@ -122,6 +122,23 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
     return () => window.clearTimeout(timeoutId);
   }, [posMessage, posError]);
 
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') {
+        return;
+      }
+
+      router.get('/admin/products', {}, {
+        preserveState: true,
+        preserveScroll: true,
+        replace: true,
+        only: ['openCheckouts', 'runningTables'],
+      });
+    }, 2500);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
+
   const filteredPosProducts = activeProducts.filter((product) => {
     const category = normalizeCategory(product.category);
     const searchText = `${product.name} ${category}`.toLowerCase();
@@ -216,6 +233,12 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
       setPosMessage(`Created Tab #${result.checkout_id} with product items.`);
       setCart([]);
       setActionOpen(false);
+      router.get('/admin/products', {}, {
+        preserveState: true,
+        preserveScroll: true,
+        replace: true,
+        only: ['openCheckouts', 'runningTables'],
+      });
     } catch (error) {
       setPosError(error instanceof Error ? error.message : 'Failed to create open tab.');
     }
@@ -628,7 +651,7 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
               <Input type="number" step="0.01" min={0} value={card} onChange={(e) => setCard(e.target.value)} />
             </div>
             <div className="flex items-center gap-2">
-              <label className="w-24 shrink-0 text-sm text-muted-foreground">Transfer (QR)</label>
+              <label className="w-24 shrink-0 text-sm text-muted-foreground">Transfer</label>
               <Input
                 type="number"
                 step="0.01"
@@ -645,10 +668,6 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
                 value={customerEmail}
                 onChange={(e) => setCustomerEmail(e.target.value)}
               />
-            </div>
-            <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-muted-foreground/40 bg-muted/30 p-6 text-center text-sm text-muted-foreground">
-              <span className="font-medium">QR Code placeholder</span>
-              <span className="text-xs">Scan to pay via transfer</span>
             </div>
           </div>
           <DialogFooter>

@@ -30,8 +30,5 @@ return new class extends Migration
             $table->unsignedBigInteger('game_session_id')->nullable(false)->change();
             $table->foreign('game_session_id')->references('id')->on('game_sessions');
         });
-        Schema::table('receipts', function (Blueprint $table) {
-            $table->dropForeign(['checkout_session_id']);
-        });
     }
 };

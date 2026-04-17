@@ -249,6 +249,23 @@ setInvoiceReceipt(receiptProp);
     return () => window.clearTimeout(timeoutId);
   }, [tabSuccessMessage]);
 
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') {
+        return;
+      }
+
+      router.get('/tables', {}, {
+        preserveState: true,
+        preserveScroll: true,
+        replace: true,
+        only: ['tables'],
+      });
+    }, 2500);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
+
   // Live timer: tick every second
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -565,16 +582,8 @@ payload.customer_email = customerEmail.trim();
 
     setSubmitting(true);
     router.post(url, payload, {
-      onSuccess: (visit: { page?: { props?: { errors?: Record<string, string> } } }) => {
+      onSuccess: () => {
         setSubmitting(false);
-        const err = visit?.page?.props?.errors?.payments;
-
-        if (err) {
-          setCheckoutError(err);
-
-          return;
-        }
-
         closeCheckout(true);
       },
       onError: () => setSubmitting(false),
@@ -621,7 +630,7 @@ payload.customer_email = customerEmail.trim();
       }
       setCancelSessionOpen(false);
       setCancelSessionTableId(null);
-      router.reload({ preserveScroll: true });
+      router.reload();
     } finally {
       setCancelSessionSubmitting(false);
     }
@@ -674,7 +683,7 @@ payload.customer_email = customerEmail.trim();
       }
       closeEditSessionItems();
       setDetailsTable(null);
-      router.reload({ preserveScroll: true });
+      router.reload();
     } finally {
       setEditSessionSaving(false);
     }
@@ -1592,7 +1601,7 @@ return;
                     />
                   </div>
                   <div className="flex items-center gap-2">
-                    <Label className="w-24 shrink-0">Transfer (QR)</Label>
+                    <Label className="w-24 shrink-0">Transfer</Label>
                     <Input
                       type="number"
                       step="0.01"
@@ -1617,15 +1626,11 @@ return;
                     />
                   </div>
                 </div>
-                <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-muted-foreground/40 bg-muted/30 p-6 text-center text-sm text-muted-foreground">
-                  <span className="font-medium">QR Code placeholder</span>
-                  <span className="text-xs">Scan to pay via transfer</span>
-                </div>
                 {checkoutError && (
                   <p className="text-sm text-destructive">{checkoutError}</p>
                 )}
                 <DialogFooter>
-                  <Button variant="outline" onClick={closeCheckout} disabled={submitting}>
+                  <Button variant="outline" onClick={() => closeCheckout()} disabled={submitting}>
                     Cancel
                   </Button>
                   <Button onClick={handleCheckoutComplete} disabled={submitting}>
@@ -1657,9 +1662,6 @@ return;
                     <span className="text-foreground">{invoiceReceipt.date}</span>
                     <span>Time:</span>
                     <span className="text-foreground">{invoiceReceipt.time}</span>
-                  </div>
-                  <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-muted-foreground/40 bg-muted/30 p-4 text-center text-sm text-muted-foreground">
-                    <span className="font-medium">QR Code placeholder</span>
                   </div>
                   <div className="grid grid-cols-2 gap-1 text-muted-foreground">
                     <span>Customer:</span>
