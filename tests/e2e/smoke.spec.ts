@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import { expect, test } from '@playwright/test';
 
 const email = process.env.E2E_EMAIL;

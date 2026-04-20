@@ -33,6 +33,14 @@ jobs:
           composer install -q --no-ansi --no-interaction --no-scripts --no-progress --prefer-dist
           npm install
 
+      - name: Prepare Laravel Environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Generate Wayfinder Types
+        run: php artisan wayfinder:generate
+
       - name: Run Pint
         run: composer lint
 
