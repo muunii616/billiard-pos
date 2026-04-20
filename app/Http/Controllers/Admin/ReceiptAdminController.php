@@ -9,6 +9,7 @@ use App\Models\ReceiptPayment;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class ReceiptAdminController extends Controller
 {
@@ -57,7 +58,7 @@ class ReceiptAdminController extends Controller
             'line_items.*.unit_price' => ['required_with:line_items', 'numeric', 'min:0'],
             'line_items.*.subtotal' => ['required_with:line_items', 'numeric', 'min:0'],
             'payments' => ['sometimes', 'array'],
-            'payments.*.method' => ['required_with:payments', 'string', 'in:cash,card,transfer_qr'],
+            'payments.*.method' => ['required_with:payments', 'string', Rule::in(config('pos.payment_methods', []))],
             'payments.*.amount' => ['required_with:payments', 'numeric', 'min:0'],
         ]);
 

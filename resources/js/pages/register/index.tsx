@@ -37,7 +37,11 @@ function adminJsonHeaders(): Record<string, string> {
     Accept: 'application/json',
     'Content-Type': 'application/json',
   };
-  if (csrfToken) headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
+
+  if (csrfToken) {
+headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
+}
+
   return headers;
 }
 
@@ -53,16 +57,24 @@ export default function RegisterPage() {
   const [varianceReason, setVarianceReason] = useState('');
 
   const closeVariancePreview = useMemo(() => {
-    if (!openSession) return 0;
+    if (!openSession) {
+return 0;
+}
+
     return Math.round(((Number(countedCash) || 0) - Number(openSession.expected_cash || 0)) * 100) / 100;
   }, [countedCash, openSession]);
 
   const loadCurrent = async () => {
     setLoading(true);
     setError(null);
+
     try {
       const res = await fetch('/admin/cash/current', { headers: { Accept: 'application/json' } });
-      if (!res.ok) throw new Error('Failed to load register shift.');
+
+      if (!res.ok) {
+throw new Error('Failed to load register shift.');
+}
+
       const data = await res.json();
       const open = (data.open_session ?? null) as CashSessionInfo | null;
       const closed = (data.latest_closed_session ?? null) as CashSessionInfo | null;
@@ -82,6 +94,7 @@ export default function RegisterPage() {
   const handleOpenShift = async () => {
     setActionLoading(true);
     setError(null);
+
     try {
       const res = await fetch('/admin/cash/open', {
         method: 'POST',
@@ -90,7 +103,11 @@ export default function RegisterPage() {
         body: JSON.stringify({ opening_cash: Number(openingCash) || 0 }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || 'Failed to open shift.');
+
+      if (!res.ok) {
+throw new Error(data.message || 'Failed to open shift.');
+}
+
       setOpeningCash('');
       await loadCurrent();
     } catch (e) {
@@ -101,15 +118,21 @@ export default function RegisterPage() {
   };
 
   const handleCloseShift = async () => {
-    if (!openSession) return;
+    if (!openSession) {
+return;
+}
+
     const variance = closeVariancePreview;
+
     if (Math.abs(variance) > 0.0001 && varianceReason.trim() === '') {
       setError('Reason is required when variance is not zero.');
+
       return;
     }
 
     setActionLoading(true);
     setError(null);
+
     try {
       const res = await fetch('/admin/cash/close', {
         method: 'POST',
@@ -121,13 +144,19 @@ export default function RegisterPage() {
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || 'Failed to close shift.');
+
+      if (!res.ok) {
+throw new Error(data.message || 'Failed to close shift.');
+}
+
       const receiptUrl = typeof data.receipt_url === 'string' ? data.receipt_url : null;
       setCountedCash('');
       setVarianceReason('');
+
       if (receiptUrl) {
         window.open(receiptUrl, '_blank', 'noopener,noreferrer');
       }
+
       await loadCurrent();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to close shift.');

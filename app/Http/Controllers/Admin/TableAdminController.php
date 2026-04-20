@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\BilliardTable;
 use App\Models\Product;
 use App\Models\SessionItem;
+use App\Support\PosItemUpserter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -13,8 +14,8 @@ class TableAdminController extends Controller
 {
     public function cancelSession(Request $request, BilliardTable $table)
     {
-        $session = $table->sessions()->with('items')->latest()->first();
-        if (! $session || ! in_array($session->status, ['running', 'paused'], true)) {
+        $session = $table->latestActiveSession(['items']);
+        if (! $session) {
             return response()->json(['message' => 'No active session to cancel.'], 422);
         }
 
@@ -48,7 +49,7 @@ class TableAdminController extends Controller
         ]);
 
         // Only allow maintenance toggle when not running/paused (so we don't break active sessions).
-        if (in_array($table->status, ['running', 'paused'], true)) {
+        if (in_array($table->status, BilliardTable::activeSessionStatuses(), true)) {
             return response()->json(['message' => 'Cannot change maintenance status during an active session.'], 422);
         }
 
@@ -60,8 +61,8 @@ class TableAdminController extends Controller
     /** Edit line items on the table’s current running/paused session (admin). */
     public function updateSessionItems(Request $request, BilliardTable $table)
     {
-        $session = $table->sessions()->latest()->first();
-        if (! $session || ! in_array($session->status, ['running', 'paused'], true)) {
+        $session = $table->latestActiveSession();
+        if (! $session) {
             return response()->json(['message' => 'No active session to edit.'], 422);
         }
 
@@ -97,13 +98,7 @@ class TableAdminController extends Controller
 
                 if (! empty($row['product_id'])) {
                     $product = Product::findOrFail((int) $row['product_id']);
-                    $item = $session->items()->firstOrNew(['product_id' => $product->id]);
-                    $item->quantity = $qty;
-                    $item->product_name = $product->name;
-                    $item->product_category = $product->category;
-                    $item->unit_price = $product->price;
-                    $item->total_price = round($qty * (float) $item->unit_price, 2);
-                    $item->save();
+                    PosItemUpserter::upsertSessionProduct($session, $product, $qty, increment: false);
 
                     continue;
                 }
@@ -118,14 +113,7 @@ class TableAdminController extends Controller
                 if (trim($name) === '') {
                     continue;
                 }
-                $session->items()->create([
-                    'product_id' => null,
-                    'product_name' => $name,
-                    'product_category' => $category ?: null,
-                    'quantity' => $qty,
-                    'unit_price' => $unitPrice,
-                    'total_price' => round($qty * $unitPrice, 2),
-                ]);
+                PosItemUpserter::createSessionManualItem($session, $name, $category, $qty, $unitPrice);
             }
         });
 

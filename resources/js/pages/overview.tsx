@@ -5,6 +5,15 @@ import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis } from 'rechar
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import type {
+  ChartConfig} from '@/components/ui/chart';
+import {
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+} from '@/components/ui/chart';
 import {
   Dialog,
   DialogContent,
@@ -16,26 +25,17 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import type {
-  ChartConfig} from '@/components/ui/chart';
-import {
-  ChartContainer,
-  ChartLegend,
-  ChartLegendContent,
-  ChartTooltip,
-  ChartTooltipContent,
-} from '@/components/ui/chart';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover';
 import {
   Table,
   TableBody,
@@ -125,13 +125,21 @@ export default function Overview({
   const [editStatus, setEditStatus] = useState<'paid' | 'unpaid' | 'voided'>('paid');
 
   const openReceipt = async (receiptId: number) => {
-    if (!adminEnabled) return;
+    if (!adminEnabled) {
+return;
+}
+
     setReceiptOpen(true);
     setReceiptLoading(true);
     setReceiptError(null);
+
     try {
       const res = await fetch(`/admin/receipts/${receiptId}`, { headers: { Accept: 'application/json' } });
-      if (!res.ok) throw new Error('Failed to load receipt.');
+
+      if (!res.ok) {
+throw new Error('Failed to load receipt.');
+}
+
       const data = (await res.json()) as AdminReceipt;
       setReceipt(data);
       setEditCustomerEmail(data.customer_email ?? '');
@@ -144,8 +152,12 @@ export default function Overview({
   };
 
   const saveReceiptBasics = async () => {
-    if (!receipt) return;
+    if (!receipt) {
+return;
+}
+
     setReceiptError(null);
+
     try {
       const csrfToken = document.cookie.split('; ').find((r) => r.startsWith('XSRF-TOKEN='))?.split('=')[1];
       const headers: Record<string, string> = {
@@ -153,7 +165,11 @@ export default function Overview({
         Accept: 'application/json',
         'Content-Type': 'application/json',
       };
-      if (csrfToken) headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
+
+      if (csrfToken) {
+headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
+}
+
       const res = await fetch(`/admin/receipts/${receipt.id}`, {
         method: 'PUT',
         headers,
@@ -162,10 +178,13 @@ export default function Overview({
           status: editStatus,
         }),
       });
+
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
+
         throw new Error(data.message || 'Failed to save receipt.');
       }
+
       // Refresh the page data so invoices + charts reflect voiding changes.
       router.reload();
     } catch (e) {
@@ -532,6 +551,7 @@ setMonthlyYear(Number(month.slice(0, 4)) || new Date().getFullYear());
         open={receiptOpen}
         onOpenChange={(open) => {
           setReceiptOpen(open);
+
           if (!open) {
             setReceipt(null);
             setReceiptError(null);

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\CheckoutSession;
 use App\Models\CheckoutSessionItem;
 use App\Models\Product;
+use App\Support\PosItemUpserter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -13,7 +14,7 @@ class CheckoutAdminController extends Controller
 {
     public function updateItems(Request $request, CheckoutSession $checkout)
     {
-        if ($checkout->status !== 'open') {
+        if (! $checkout->isOpen()) {
             return response()->json(['message' => 'Only open tabs can be edited.'], 422);
         }
 
@@ -48,13 +49,7 @@ class CheckoutAdminController extends Controller
                 // New line item: prefer product_id lookup when available
                 if (! empty($row['product_id'])) {
                     $product = Product::findOrFail((int) $row['product_id']);
-                    $item = $checkout->items()->firstOrNew(['product_id' => $product->id]);
-                    $item->quantity = $qty;
-                    $item->product_name = $product->name;
-                    $item->product_category = $product->category;
-                    $item->unit_price = $product->price;
-                    $item->total_price = round($qty * (float) $item->unit_price, 2);
-                    $item->save();
+                    PosItemUpserter::upsertCheckoutProduct($checkout, $product, $qty, increment: false);
                     continue;
                 }
 
@@ -68,14 +63,7 @@ class CheckoutAdminController extends Controller
                 if (trim($name) === '') {
                     continue;
                 }
-                $checkout->items()->create([
-                    'product_id' => null,
-                    'product_name' => $name,
-                    'product_category' => $category ?: null,
-                    'quantity' => $qty,
-                    'unit_price' => $unitPrice,
-                    'total_price' => round($qty * $unitPrice, 2),
-                ]);
+                PosItemUpserter::createCheckoutManualItem($checkout, $name, $category, $qty, $unitPrice);
             }
         });
 
@@ -84,7 +72,7 @@ class CheckoutAdminController extends Controller
 
     public function void(CheckoutSession $checkout)
     {
-        if ($checkout->status !== 'open') {
+        if (! $checkout->isOpen()) {
             return response()->json(['message' => 'This tab is not open.'], 422);
         }
 
@@ -104,7 +92,7 @@ class CheckoutAdminController extends Controller
 
         $checkout->load(['items', 'gameSessions.items']);
 
-        $new = CheckoutSession::create(['status' => 'open']);
+        $new = CheckoutSession::create(['status' => CheckoutSession::STATUS_OPEN]);
 
         DB::transaction(function () use ($checkout, $new) {
             foreach ($checkout->items as $item) {

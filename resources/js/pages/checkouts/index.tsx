@@ -102,12 +102,27 @@ function roundMoney(n: number): number {
 /** Card/transfer share a cap of grand total; clamp one field against the other. */
 function limitCardOrTransferValue(raw: string, maxAllowed: number): string {
   const cap = Math.max(0, roundMoney(maxAllowed));
-  if (raw === '') return '';
+
+  if (raw === '') {
+return '';
+}
+
   const n = parseFloat(raw);
-  if (Number.isNaN(n)) return raw;
-  if (n < 0) return '0';
+
+  if (Number.isNaN(n)) {
+return raw;
+}
+
+  if (n < 0) {
+return '0';
+}
+
   const clamped = Math.min(n, cap);
-  if (clamped !== n) return clamped === 0 ? '' : String(clamped);
+
+  if (clamped !== n) {
+return clamped === 0 ? '' : String(clamped);
+}
+
   return raw;
 }
 
@@ -118,9 +133,11 @@ function adminJsonHeaders(): Record<string, string> {
     Accept: 'application/json',
     'Content-Type': 'application/json',
   };
+
   if (csrfToken) {
     headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
   }
+
   return headers;
 }
 
@@ -173,11 +190,18 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
   const [reopenTabId, setReopenTabId] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!payModalOpen || !summary) return;
+    if (!payModalOpen || !summary) {
+return;
+}
+
     const g = roundMoney(Number(summary.grand_total));
     const d = roundMoney(parseFloat(card) || 0);
     const t = roundMoney(parseFloat(transfer) || 0);
-    if (d + t <= g + 0.01) return;
+
+    if (d + t <= g + 0.01) {
+return;
+}
+
     const newT = Math.min(t, g);
     const newD = Math.min(d, Math.max(0, g - newT));
     setCard(newD === 0 ? '' : String(newD));
@@ -193,7 +217,10 @@ setInvoiceReceipt(receiptProp);
   }, [receiptProp]);
 
   useEffect(() => {
-    if (!adminEnabled) return;
+    if (!adminEnabled) {
+return;
+}
+
     const params = new URLSearchParams(window.location.search);
     setShowAll(params.get('all') === '1');
   }, [adminEnabled]);
@@ -255,7 +282,10 @@ throw new Error('Could not load summary');
     setEditTabItemsDraft([]);
     fetch(`/checkouts/${checkoutId}/summary`)
       .then((res) => {
-        if (!res.ok) throw new Error('load');
+        if (!res.ok) {
+throw new Error('load');
+}
+
         return res.json();
       })
       .then((data: CheckoutSummary) => {
@@ -274,7 +304,10 @@ throw new Error('Could not load summary');
   };
 
   const saveEditTabItems = async () => {
-    if (editTabItemsCheckoutId == null) return;
+    if (editTabItemsCheckoutId == null) {
+return;
+}
+
     setEditTabItemsSaving(true);
     setEditTabItemsError(null);
     const items = [
@@ -284,6 +317,7 @@ throw new Error('Could not load summary');
       })),
       ...editTabItemsRemovedIds.map((id) => ({ id, quantity: 0 })),
     ];
+
     try {
       const res = await fetch(`/admin/checkouts/${editTabItemsCheckoutId}/items`, {
         method: 'PUT',
@@ -292,10 +326,13 @@ throw new Error('Could not load summary');
         body: JSON.stringify({ items }),
       });
       const data = await res.json().catch(() => ({}));
+
       if (!res.ok) {
         setEditTabItemsError(typeof data.message === 'string' ? data.message : 'Could not save items.');
+
         return;
       }
+
       closeEditTabItems();
       router.reload();
     } finally {
@@ -329,10 +366,12 @@ return;
     const transferNum = parseFloat(transfer) || 0;
     const grandTotal = Math.round(Number(summary.grand_total) * 100) / 100;
     const cardTransferSum = Math.round((cardNum + transferNum) * 100) / 100;
+
     if (cardTransferSum > grandTotal + 0.01) {
       setPayError(
         `Card plus transfer (${money(cardTransferSum)}) cannot exceed grand total (${money(grandTotal)}). Reduce card or transfer, or use cash for the rest.`,
       );
+
       return;
     }
 
@@ -341,6 +380,7 @@ return;
 
     if (totalEntered + 1e-9 < grandTotal) {
       setPayError(`Total paid (${money(totalEntered)}) must be at least grand total (${money(grandTotal)}).`);
+
       return;
     }
 
@@ -348,30 +388,38 @@ return;
       setPayError(
         `Change is ${money(change)}. Cash (${money(cashNum)}) must cover change when the customer is due cash back.`,
       );
+
       return;
     }
 
     const cashApplied = change > 0.01 ? Math.round((cashNum - change) * 100) / 100 : cashNum;
+
     if (cashApplied < -0.01) {
       setPayError('Invalid cash amount.');
+
       return;
     }
 
     setPayError(null);
     const payments: { method: string; amount: number }[] = [];
+
     if (cardNum > 0) {
       payments.push({ method: 'card', amount: cardNum });
     }
+
     if (transferNum > 0) {
       payments.push({ method: 'transfer_qr', amount: transferNum });
     }
+
     if (cashApplied > 0) {
       payments.push({ method: 'cash', amount: cashApplied });
     }
 
     const paymentsSum = Math.round(payments.reduce((s, p) => s + p.amount, 0) * 100) / 100;
+
     if (Math.abs(paymentsSum - grandTotal) > 0.02) {
       setPayError('Could not balance payment split. Check amounts.');
+
       return;
     }
 
@@ -440,6 +488,7 @@ headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
 
       return;
     }
+
     setMergeConfirmOpen(true);
   };
 
@@ -552,7 +601,10 @@ return;
   };
 
   const confirmDeleteTab = async () => {
-    if (deleteTabId == null) return;
+    if (deleteTabId == null) {
+return;
+}
+
     const res = await fetch(`/admin/checkouts/${deleteTabId}/void`, {
       method: 'POST',
       headers: adminJsonHeaders(),
@@ -562,15 +614,21 @@ return;
     const data = await res.json().catch(() => ({}));
     setDeleteTabConfirmOpen(false);
     setDeleteTabId(null);
+
     if (!res.ok) {
       alert(data.message || 'Failed to delete tab.');
+
       return;
     }
+
     router.get('/checkouts', showAll ? { all: 1 } : {}, { preserveScroll: true, replace: true });
   };
 
   const confirmReopenTab = async () => {
-    if (reopenTabId == null) return;
+    if (reopenTabId == null) {
+return;
+}
+
     const res = await fetch(`/admin/checkouts/${reopenTabId}/reopen`, {
       method: 'POST',
       headers: adminJsonHeaders(),
@@ -580,10 +638,13 @@ return;
     const data = await res.json().catch(() => ({}));
     setReopenTabConfirmOpen(false);
     setReopenTabId(null);
+
     if (!res.ok) {
       alert(data.message || 'Failed to reopen tab.');
+
       return;
     }
+
     router.get('/checkouts', showAll ? { all: 1 } : {}, { preserveScroll: true, replace: true });
   };
 
@@ -635,7 +696,10 @@ return;
           open={deleteTabConfirmOpen}
           onOpenChange={(open) => {
             setDeleteTabConfirmOpen(open);
-            if (!open) setDeleteTabId(null);
+
+            if (!open) {
+setDeleteTabId(null);
+}
           }}
         >
           <AlertDialogContent>
@@ -663,7 +727,10 @@ return;
           open={reopenTabConfirmOpen}
           onOpenChange={(open) => {
             setReopenTabConfirmOpen(open);
-            if (!open) setReopenTabId(null);
+
+            if (!open) {
+setReopenTabId(null);
+}
           }}
         >
           <AlertDialogContent>
@@ -908,7 +975,9 @@ return;
         <Dialog
           open={editTabItemsOpen}
           onOpenChange={(open) => {
-            if (!open) closeEditTabItems();
+            if (!open) {
+closeEditTabItems();
+}
           }}
         >
           <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
@@ -1005,7 +1074,11 @@ return;
                     const g = Number(summary.grand_total) || 0;
                     const entered = Math.round((c + d + t) * 100) / 100;
                     const ch = Math.round((entered - g) * 100) / 100;
-                    if (c <= 0 && d <= 0 && t <= 0) return null;
+
+                    if (c <= 0 && d <= 0 && t <= 0) {
+return null;
+}
+
                     return (
                       <>
                         {d > 0 && (

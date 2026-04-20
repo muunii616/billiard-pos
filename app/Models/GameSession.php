@@ -9,6 +9,8 @@ class GameSession extends Model
 {
     use HasFactory;
 
+    public const ACTIVE_STATUSES = ['running', 'paused'];
+
     protected $fillable = [
         'billiard_table_id',
         'checkout_session_id',
@@ -53,5 +55,15 @@ class GameSession extends Model
     public function receipt()
     {
         return $this->hasOne(Receipt::class);
+    }
+
+    public static function activeStatuses(): array
+    {
+        return self::ACTIVE_STATUSES;
+    }
+
+    public function isActive(): bool
+    {
+        return in_array((string) $this->status, self::ACTIVE_STATUSES, true);
     }
 }

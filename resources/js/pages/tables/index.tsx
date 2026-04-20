@@ -2,7 +2,6 @@ import { Head, router, usePage, useRemember } from '@inertiajs/react';
 import { Play, Pause, ShoppingCart, ListChecks, Square, Pencil, Plus, CheckCircle2Icon } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,6 +13,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
+import { Button } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
@@ -120,12 +120,27 @@ function roundMoney(n: number): number {
 
 function limitCardOrTransferValue(raw: string, maxAllowed: number): string {
   const cap = Math.max(0, roundMoney(maxAllowed));
-  if (raw === '') return '';
+
+  if (raw === '') {
+return '';
+}
+
   const n = parseFloat(raw);
-  if (Number.isNaN(n)) return raw;
-  if (n < 0) return '0';
+
+  if (Number.isNaN(n)) {
+return raw;
+}
+
+  if (n < 0) {
+return '0';
+}
+
   const clamped = Math.min(n, cap);
-  if (clamped !== n) return clamped === 0 ? '' : String(clamped);
+
+  if (clamped !== n) {
+return clamped === 0 ? '' : String(clamped);
+}
+
   return raw;
 }
 
@@ -136,9 +151,11 @@ function adminJsonHeaders(): Record<string, string> {
     Accept: 'application/json',
     'Content-Type': 'application/json',
   };
+
   if (csrfToken) {
     headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
   }
+
   return headers;
 }
 
@@ -217,11 +234,18 @@ export default function TablesIndex({ tables, products, receipt: receiptProp, is
       : 0;
 
   useEffect(() => {
-    if (!checkoutOpen || !checkoutSummary) return;
+    if (!checkoutOpen || !checkoutSummary) {
+return;
+}
+
     const g = roundMoney(Number(checkoutSummary.grand_total));
     const d = roundMoney(parseFloat(card) || 0);
     const t = roundMoney(parseFloat(transfer) || 0);
-    if (d + t <= g + 0.01) return;
+
+    if (d + t <= g + 0.01) {
+return;
+}
+
     const newT = Math.min(t, g);
     const newD = Math.min(d, Math.max(0, g - newT));
     setCard(newD === 0 ? '' : String(newD));
@@ -527,10 +551,12 @@ return;
     const transferNum = parseFloat(transfer) || 0;
     const grandTotal = Math.round(Number(checkoutSummary.grand_total) * 100) / 100;
     const cardTransferSum = Math.round((cardNum + transferNum) * 100) / 100;
+
     if (cardTransferSum > grandTotal + 0.01) {
       setCheckoutError(
         `Card plus transfer (${money(cardTransferSum)}) cannot exceed grand total (${money(grandTotal)}). Reduce card or transfer, or use cash for the rest.`,
       );
+
       return;
     }
 
@@ -539,6 +565,7 @@ return;
 
     if (totalEntered + 1e-9 < grandTotal) {
       setCheckoutError(`Total paid (${money(totalEntered)}) must be at least grand total (${money(grandTotal)}).`);
+
       return;
     }
 
@@ -546,30 +573,38 @@ return;
       setCheckoutError(
         `Change is ${money(change)}. Cash (${money(cashNum)}) must cover change when the customer is due cash back.`,
       );
+
       return;
     }
 
     const cashApplied = change > 0.01 ? Math.round((cashNum - change) * 100) / 100 : cashNum;
+
     if (cashApplied < -0.01) {
       setCheckoutError('Invalid cash amount.');
+
       return;
     }
 
     setCheckoutError(null);
     const payments: { method: string; amount: number }[] = [];
+
     if (cardNum > 0) {
       payments.push({ method: 'card', amount: cardNum });
     }
+
     if (transferNum > 0) {
       payments.push({ method: 'transfer_qr', amount: transferNum });
     }
+
     if (cashApplied > 0) {
       payments.push({ method: 'cash', amount: cashApplied });
     }
 
     const paymentsSum = Math.round(payments.reduce((s, p) => s + p.amount, 0) * 100) / 100;
+
     if (Math.abs(paymentsSum - grandTotal) > 0.02) {
       setCheckoutError('Could not balance payment split. Check amounts.');
+
       return;
     }
 
@@ -602,9 +637,13 @@ payload.customer_email = customerEmail.trim();
   };
 
   const confirmCancelSession = async () => {
-    if (cancelSessionTableId == null) return;
+    if (cancelSessionTableId == null) {
+return;
+}
+
     setCancelSessionSubmitting(true);
     setCancelSessionError(null);
+
     try {
       const csrfToken = document.cookie.split('; ').find((r) => r.startsWith('XSRF-TOKEN='))?.split('=')[1];
       const headers: Record<string, string> = {
@@ -612,9 +651,11 @@ payload.customer_email = customerEmail.trim();
         Accept: 'application/json',
         'Content-Type': 'application/json',
       };
+
       if (csrfToken) {
         headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
       }
+
       const res = await fetch(`/admin/tables/${cancelSessionTableId}/cancel-session`, {
         method: 'POST',
         headers,
@@ -622,12 +663,15 @@ payload.customer_email = customerEmail.trim();
         body: '{}',
       });
       const data = await res.json().catch(() => ({}));
+
       if (!res.ok) {
         setCancelSessionError(
           typeof data.message === 'string' ? data.message : 'Failed to cancel session.',
         );
+
         return;
       }
+
       setCancelSessionOpen(false);
       setCancelSessionTableId(null);
       router.reload();
@@ -637,7 +681,10 @@ payload.customer_email = customerEmail.trim();
   };
 
   const openEditSessionItems = (table: Table) => {
-    if (!table.current_session) return;
+    if (!table.current_session) {
+return;
+}
+
     setEditSessionTableId(table.id);
     setEditSessionDraft(
       table.current_session.items.map((i) => ({
@@ -659,7 +706,10 @@ payload.customer_email = customerEmail.trim();
   };
 
   const saveEditSessionItems = async () => {
-    if (editSessionTableId == null) return;
+    if (editSessionTableId == null) {
+return;
+}
+
     setEditSessionSaving(true);
     setEditSessionError(null);
     const items = [
@@ -669,6 +719,7 @@ payload.customer_email = customerEmail.trim();
       })),
       ...editSessionRemovedIds.map((id) => ({ id, quantity: 0 })),
     ];
+
     try {
       const res = await fetch(`/admin/tables/${editSessionTableId}/session-items`, {
         method: 'PUT',
@@ -677,10 +728,13 @@ payload.customer_email = customerEmail.trim();
         body: JSON.stringify({ items }),
       });
       const data = await res.json().catch(() => ({}));
+
       if (!res.ok) {
         setEditSessionError(typeof data.message === 'string' ? data.message : 'Could not save items.');
+
         return;
       }
+
       closeEditSessionItems();
       setDetailsTable(null);
       router.reload();
@@ -1180,6 +1234,7 @@ return;
                       if (detailsTable) {
                         handleAddItem(detailsTable.id);
                       }
+
                       setDetailsTable(null);
                     }}
                     className="gap-1.5"
@@ -1196,7 +1251,9 @@ return;
         <Dialog
           open={editSessionItemsOpen}
           onOpenChange={(open) => {
-            if (!open) closeEditSessionItems();
+            if (!open) {
+closeEditSessionItems();
+}
           }}
         >
           <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
@@ -1535,7 +1592,11 @@ return;
                     const g = Number(checkoutSummary.grand_total) || 0;
                     const entered = Math.round((c + d + t) * 100) / 100;
                     const ch = Math.round((entered - g) * 100) / 100;
-                    if (c <= 0 && d <= 0 && t <= 0) return null;
+
+                    if (c <= 0 && d <= 0 && t <= 0) {
+return null;
+}
+
                     return (
                       <>
                         {d > 0 && (
@@ -1710,6 +1771,7 @@ return;
           open={cancelSessionOpen}
           onOpenChange={(open) => {
             setCancelSessionOpen(open);
+
             if (!open) {
               setCancelSessionTableId(null);
               setCancelSessionError(null);

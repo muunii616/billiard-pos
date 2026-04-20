@@ -18,4 +18,26 @@ class BilliardTable extends Model
     {
         return $this->hasMany(GameSession::class);
     }
+
+    public static function activeSessionStatuses(): array
+    {
+        return GameSession::activeStatuses();
+    }
+
+    public function latestSession(array $with = []): ?GameSession
+    {
+        $query = $this->sessions()->latest();
+        if (! empty($with)) {
+            $query->with($with);
+        }
+
+        return $query->first();
+    }
+
+    public function latestActiveSession(array $with = []): ?GameSession
+    {
+        $session = $this->latestSession($with);
+
+        return $session?->isActive() ? $session : null;
+    }
 }

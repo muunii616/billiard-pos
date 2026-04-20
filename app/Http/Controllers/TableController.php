@@ -7,9 +7,10 @@ use App\Models\CheckoutSession;
 use App\Models\GameSession;
 use App\Models\Product;
 use App\Models\Receipt;
-use App\Models\ReceiptLineItem;
 use App\Models\ReceiptPayment;
-use App\Models\SessionItem;
+use App\Support\PosItemUpserter;
+use App\Support\PaymentPayload;
+use App\Support\ReceiptLineItemSnapshot;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
@@ -47,7 +48,7 @@ class TableController extends Controller
                 $lastResumeAt = null;
                 $sessionItems = [];
 
-                if ($currentSession && in_array($currentSession->status, ['running', 'paused'], true)) {
+                if ($currentSession?->isActive()) {
                     $elapsedSeconds = $this->sessionPlayedSeconds($currentSession);
                     $elapsed = gmdate('H:i:s', $elapsedSeconds);
                     if ($currentSession->status === 'running' && $currentSession->last_resume_at) {
@@ -164,14 +165,14 @@ class TableController extends Controller
 
     public function checkoutSummary(BilliardTable $table)
     {
-        $session = $table->sessions()->with('items')->latest()->first();
+        $session = $table->latestActiveSession(['items']);
 
-        if (! $session || ! in_array($session->status, ['running', 'paused'], true)) {
+        if (! $session) {
             abort(404);
         }
 
         $playedSeconds = $this->sessionPlayedSeconds($session);
-        $ratePerMinute = 0.20;
+        $ratePerMinute = (float) config('pos.rate_per_minute', 0.20);
         $timeTotal = round(($playedSeconds / 60) * $ratePerMinute, 2);
         $itemsTotal = (float) $session->items->sum('total_price');
         $grandTotal = round(max(0, $timeTotal + $itemsTotal), 2);
@@ -188,65 +189,31 @@ class TableController extends Controller
 
     public function end(Request $request, BilliardTable $table)
     {
-        $session = $table->sessions()->with('items')->latest()->first();
+        $session = $table->latestActiveSession(['items']);
 
-        if (! $session || ! in_array($session->status, ['running', 'paused'], true)) {
+        if (! $session) {
             return back()->withErrors(['table' => 'No active session to end.']);
         }
 
         $endedAt = now();
         $playedSeconds = $this->sessionPlayedSeconds($session, $endedAt);
-        $ratePerMinute = 0.20;
+        $ratePerMinute = (float) config('pos.rate_per_minute', 0.20);
         $timeTotal = round(($playedSeconds / 60) * $ratePerMinute, 2);
         $itemsTotal = (float) $session->items->sum('total_price');
         $grandTotal = round(max(0, $timeTotal + $itemsTotal), 2);
 
-        $payments = $request->input('payments', []);
-
-        // Inertia may send JSON; ensure we have an array.
-        if (is_string($payments)) {
-            $payments = json_decode($payments, true) ?? [];
+        $normalizedPayments = PaymentPayload::normalizeForTotal(
+            PaymentPayload::fromRequest($request),
+            $grandTotal,
+            allowOverpay: false,
+        );
+        if ($normalizedPayments['error'] === 'exact_total_required') {
+            return back()->withErrors(['payments' => 'Total paid must equal grand total.']);
         }
-        if (! is_array($payments)) {
-            $payments = [];
+        if ($normalizedPayments['error'] === 'card_transfer_exceeds') {
+            return back()->withErrors(['payments' => 'Card and transfer combined cannot exceed the grand total.']);
         }
-        // Fallback: parse raw JSON body when payments empty (e.g. JSON POST)
-        if (empty($payments) && $request->getContent()) {
-            $decoded = json_decode($request->getContent(), true);
-            if (is_array($decoded['payments'] ?? null)) {
-                $payments = $decoded['payments'];
-            }
-        }
-
-        $validMethods = ['cash', 'card', 'transfer_qr'];
-
-        if (! empty($payments)) {
-            $totalPaid = 0;
-            $validPayments = [];
-            foreach ($payments as $p) {
-                $method = $p['method'] ?? null;
-                $amount = isset($p['amount']) ? (float) $p['amount'] : 0;
-                if (! in_array($method, $validMethods, true) || $amount <= 0) {
-                    continue;
-                }
-                $validPayments[] = ['method' => $method, 'amount' => round($amount, 2)];
-                $totalPaid += round($amount, 2);
-            }
-            if (abs($totalPaid - $grandTotal) > 0.01) {
-                return back()->withErrors(['payments' => 'Total paid must equal grand total.']);
-            }
-            $cardTransferTotal = 0;
-            foreach ($validPayments as $vp) {
-                if (($vp['method'] ?? '') === 'card' || ($vp['method'] ?? '') === 'transfer_qr') {
-                    $cardTransferTotal += $vp['amount'];
-                }
-            }
-            if ($cardTransferTotal > $grandTotal + 0.01) {
-                return back()->withErrors(['payments' => 'Card and transfer combined cannot exceed the grand total.']);
-            }
-        } else {
-            $validPayments = $grandTotal > 0 ? [['method' => 'cash', 'amount' => $grandTotal]] : [];
-        }
+        $validPayments = $normalizedPayments['payments'];
 
         $customerEmail = $request->input('customer_email') ? trim((string) $request->input('customer_email')) : null;
         if ($customerEmail !== null && $customerEmail === '') {
@@ -294,7 +261,7 @@ class TableController extends Controller
             ->findOrFail($receiptId);
 
         $session = $receipt->session;
-        $ratePerMinute = 0.20;
+        $ratePerMinute = (float) config('pos.rate_per_minute', 0.20);
         $durationFormatted = gmdate('H:i:s', $playedSeconds);
 
         $invoicePayload = [
@@ -338,37 +305,16 @@ class TableController extends Controller
             ];
         }
 
-        // Create receipt snapshot line items (admin-editable) if missing.
-        if ($receipt->lineItems()->count() === 0) {
-            $rows = collect($invoicePayload['line_items'])->map(function (array $li) {
-                $type = (string) ($li['type'] ?? 'product');
-                $quantity = (float) ($li['quantity'] ?? 1);
-                $unitPrice = (float) ($li['unit_price'] ?? ($li['rate'] ?? 0));
-                $subtotal = (float) ($li['subtotal'] ?? 0);
-
-                return [
-                    'type' => $type,
-                    'description' => (string) ($li['description'] ?? ''),
-                    'quantity' => $quantity,
-                    'unit_price' => $unitPrice,
-                    'subtotal' => $subtotal,
-                    'meta' => array_diff_key($li, array_flip(['type', 'description', 'quantity', 'unit_price', 'rate', 'subtotal'])),
-                ];
-            })->filter(fn ($r) => trim((string) $r['description']) !== '')->values()->all();
-
-            foreach ($rows as $r) {
-                $receipt->lineItems()->create($r);
-            }
-        }
+        ReceiptLineItemSnapshot::ensureFromPayload($receipt, $invoicePayload['line_items']);
 
         return redirect()->back()->with('session_ended', $session->id)->with('receipt', $invoicePayload);
     }
 
     public function moveToCheckout(Request $request, BilliardTable $table)
     {
-        $session = $table->sessions()->with('items')->latest()->first();
+        $session = $table->latestActiveSession(['items']);
 
-        if (! $session || ! in_array($session->status, ['running', 'paused'], true)) {
+        if (! $session) {
             return back()->withErrors(['table' => 'No active session to move.']);
         }
 
@@ -376,15 +322,15 @@ class TableController extends Controller
 
         $endedAt = now();
         $playedSeconds = $this->sessionPlayedSeconds($session, $endedAt);
-        $ratePerMinute = 0.20;
+        $ratePerMinute = (float) config('pos.rate_per_minute', 0.20);
         $timeTotal = round(($playedSeconds / 60) * $ratePerMinute, 2);
         $itemsTotal = (float) $session->items->sum('total_price');
 
         DB::transaction(function () use ($session, $table, $endedAt, $playedSeconds, $timeTotal, $checkoutId) {
             if ($checkoutId) {
-                $checkout = CheckoutSession::where('status', 'open')->findOrFail($checkoutId);
+                $checkout = CheckoutSession::query()->open()->findOrFail($checkoutId);
             } else {
-                $checkout = CheckoutSession::create(['status' => 'open']);
+                $checkout = CheckoutSession::create(['status' => CheckoutSession::STATUS_OPEN]);
             }
 
             $timeMinutes = (int) round($playedSeconds / 60);
@@ -404,9 +350,9 @@ class TableController extends Controller
 
     public function addItem(Request $request, BilliardTable $table)
     {
-        $session = $table->sessions()->latest()->first();
+        $session = $table->latestActiveSession();
 
-        if (! $session || ! in_array($session->status, ['running', 'paused'], true)) {
+        if (! $session) {
             return back()->withErrors(['table' => 'No active session for this table.']);
         }
 
@@ -422,9 +368,9 @@ class TableController extends Controller
 
     public function addItemsBulk(Request $request, BilliardTable $table)
     {
-        $session = $table->sessions()->latest()->first();
+        $session = $table->latestActiveSession();
 
-        if (! $session || ! in_array($session->status, ['running', 'paused'], true)) {
+        if (! $session) {
             return back()->withErrors(['table' => 'No active session for this table.']);
         }
 
@@ -444,17 +390,6 @@ class TableController extends Controller
     private function addProductToSession(GameSession $session, int $productId, int $quantity): void
     {
         $product = Product::findOrFail($productId);
-
-        $item = SessionItem::firstOrNew([
-            'game_session_id' => $session->id,
-            'product_id' => $product->id,
-        ]);
-
-        $item->quantity = ($item->exists ? $item->quantity : 0) + $quantity;
-        $item->product_name = $product->name;
-        $item->product_category = $product->category;
-        $item->unit_price = $product->price;
-        $item->total_price = $item->quantity * $item->unit_price;
-        $item->save();
+        PosItemUpserter::upsertSessionProduct($session, $product, $quantity, increment: true);
     }
 }

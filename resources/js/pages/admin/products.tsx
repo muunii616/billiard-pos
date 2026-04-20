@@ -63,9 +63,17 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
     const value = (raw || '').trim();
     const key = value.toLowerCase();
 
-    if (key === 'drink' || key === 'drinks') return 'Drinks';
-    if (key === 'snack' || key === 'snacks') return 'Snacks';
-    if (key === 'set' || key === 'sets' || key === 'combo' || key === 'combos') return 'Sets';
+    if (key === 'drink' || key === 'drinks') {
+return 'Drinks';
+}
+
+    if (key === 'snack' || key === 'snacks') {
+return 'Snacks';
+}
+
+    if (key === 'set' || key === 'sets' || key === 'combo' || key === 'combos') {
+return 'Sets';
+}
 
     return value
       .split(/\s+/)
@@ -144,17 +152,20 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
     const searchText = `${product.name} ${category}`.toLowerCase();
     const matchesSearch = searchText.includes(posSearch.toLowerCase());
     const matchesCategory = posCategory === 'all' || posCategory === category;
+
     return matchesSearch && matchesCategory;
   });
 
   const addToCart = (product: Product) => {
     setCart((prev) => {
       const existing = prev.find((item) => item.productId === product.id);
+
       if (existing) {
         return prev.map((item) =>
           item.productId === product.id ? { ...item, quantity: item.quantity + 1 } : item,
         );
       }
+
       return [
         ...prev,
         { productId: product.id, name: product.name, price: Number(product.price), quantity: 1 },
@@ -193,19 +204,24 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
       Accept: 'application/json',
       'X-Requested-With': 'XMLHttpRequest',
     };
+
     if (token) {
       headers['X-XSRF-TOKEN'] = decodeURIComponent(token);
     }
+
     const response = await fetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
     });
     const json = await response.json().catch(() => ({}));
+
     if (!response.ok) {
       const message = json?.message || 'Request failed.';
+
       throw new Error(message);
     }
+
     return json;
   };
 
@@ -227,10 +243,13 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
   const handleOpenActions = () => {
     setPosError(null);
     setPosMessage(null);
+
     if (cart.length === 0) {
       setPosError('Add at least one product.');
+
       return;
     }
+
     setActionOpen(true);
   };
 
@@ -254,8 +273,10 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
   const handleAddToExistingTab = () => {
     if (!selectedCheckoutId) {
       setPosError('Select an open tab first.');
+
       return;
     }
+
     router.post(
       `/checkouts/${selectedCheckoutId}/items/bulk`,
       { items: posItemsPayload() },
@@ -273,8 +294,10 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
   const handleAddToRunningTable = () => {
     if (!selectedTableId) {
       setPosError('Select a running table first.');
+
       return;
     }
+
     router.post(
       `/tables/${selectedTableId}/items/bulk`,
       { items: posItemsPayload() },
@@ -297,8 +320,10 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
   const handleActionExistingTab = () => {
     if (openCheckouts.length === 0) {
       setPosError('No open tab available. Create a new tab first.');
+
       return;
     }
+
     setSelectedCheckoutId((current) => current ?? openCheckouts[0].id);
     setActionOpen(false);
     setExistingTabOpen(true);
@@ -307,8 +332,10 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
   const handleActionRunningTable = () => {
     if (runningTables.length === 0) {
       setPosError('No running table available right now.');
+
       return;
     }
+
     setSelectedTableId((current) => current ?? runningTables[0].id);
     setActionOpen(false);
     setRunningTableOpen(true);
@@ -323,28 +350,46 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
   const handlePayNow = async () => {
     if (cart.length === 0) {
       setPosError('Add at least one product.');
+
       return;
     }
+
     const cashValue = parseFloat(cash) || 0;
     const cardValue = parseFloat(card) || 0;
     const transferValue = parseFloat(transfer) || 0;
     const totalPaid = Math.round((cashValue + cardValue + transferValue) * 100) / 100;
     const expected = Math.round(cartTotal * 100) / 100;
+
     if (totalPaid + 0.01 < expected) {
       setPosError(`Total paid must be at least ${money(expected)}.`);
+
       return;
     }
+
     const nonCashTotal = Math.round((cardValue + transferValue) * 100) / 100;
+
     if (nonCashTotal > expected + 0.01) {
       setPosError('Card and transfer combined cannot exceed the cart total.');
+
       return;
     }
+
     const payments: { method: string; amount: number }[] = [];
-    if (cashValue > 0) payments.push({ method: 'cash', amount: cashValue });
-    if (cardValue > 0) payments.push({ method: 'card', amount: cardValue });
-    if (transferValue > 0) payments.push({ method: 'transfer_qr', amount: transferValue });
+
+    if (cashValue > 0) {
+payments.push({ method: 'cash', amount: cashValue });
+}
+
+    if (cardValue > 0) {
+payments.push({ method: 'card', amount: cardValue });
+}
+
+    if (transferValue > 0) {
+payments.push({ method: 'transfer_qr', amount: transferValue });
+}
 
     setPaying(true);
+
     try {
       const created = await postJson('/checkouts/from-products', { items: posItemsPayload() });
       await postJson(`/checkouts/${created.checkout_id}/complete`, {
@@ -366,10 +411,13 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
 
     if (createCategoryMode === 'new') {
       const nextCategory = newCreateCategory.trim();
+
       if (!nextCategory) {
         setPosError('Enter a new category name.');
+
         return;
       }
+
       setData('category', nextCategory);
     } else {
       setData('category', selectedCreateCategory);
@@ -713,6 +761,7 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
           open={createOpen}
           onOpenChange={(open) => {
             setCreateOpen(open);
+
             if (!open) {
               reset();
               setCreateCategoryMode('existing');
@@ -740,8 +789,10 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
                     if (value === '__new__') {
                       setCreateCategoryMode('new');
                       setData('category', newCreateCategory.trim());
+
                       return;
                     }
+
                     setCreateCategoryMode('existing');
                     setSelectedCreateCategory(value);
                     setData('category', value);

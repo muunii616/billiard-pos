@@ -112,7 +112,11 @@ export default function AdminUsers({ users }: Props) {
 
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editUser) return;
+
+    if (!editUser) {
+return;
+}
+
     editForm.put(`/admin/users/${editUser.id}`, {
       preserveScroll: true,
       onSuccess: () => closeEdit(),
@@ -221,7 +225,10 @@ export default function AdminUsers({ users }: Props) {
         open={createOpen}
         onOpenChange={(open) => {
           setCreateOpen(open);
-          if (!open) reset();
+
+          if (!open) {
+reset();
+}
         }}
       >
         <DialogContent className="sm:max-w-lg">
@@ -309,7 +316,9 @@ export default function AdminUsers({ users }: Props) {
       <Dialog
         open={editUser !== null}
         onOpenChange={(open) => {
-          if (!open) closeEdit();
+          if (!open) {
+closeEdit();
+}
         }}
       >
         <DialogContent className="sm:max-w-lg">

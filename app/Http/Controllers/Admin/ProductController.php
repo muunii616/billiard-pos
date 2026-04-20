@@ -30,7 +30,7 @@ class ProductController extends Controller
     {
         $products = Product::orderBy('name')->get();
         $openCheckouts = CheckoutSession::with('gameSessions.table')
-            ->where('status', 'open')
+            ->open()
             ->orderByDesc('id')
             ->get()
             ->map(function (CheckoutSession $checkout) {
@@ -48,7 +48,7 @@ class ProductController extends Controller
             ->values();
 
         $runningTables = BilliardTable::query()
-            ->whereIn('status', ['running', 'paused'])
+            ->whereIn('status', BilliardTable::activeSessionStatuses())
             ->orderBy('name')
             ->get(['id', 'name', 'status']);
 

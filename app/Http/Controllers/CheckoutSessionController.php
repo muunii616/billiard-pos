@@ -7,6 +7,9 @@ use App\Models\CheckoutSessionItem;
 use App\Models\Product;
 use App\Models\Receipt;
 use App\Models\ReceiptPayment;
+use App\Support\PaymentPayload;
+use App\Support\PosItemUpserter;
+use App\Support\ReceiptLineItemSnapshot;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
@@ -38,7 +41,7 @@ class CheckoutSessionController extends Controller
 
         // Merged source tabs are not shown as separate rows — their sessions/items moved to the target tab.
         $checkoutsQuery = CheckoutSession::with(['gameSessions.table', 'items'])
-            ->when(! $includeAll, fn ($q) => $q->where('status', 'open'))
+            ->when(! $includeAll, fn ($q) => $q->open())
             ->when($includeAll, fn ($q) => $q->where('status', '!=', 'merged'))
             ->orderByDesc('id')
             ->get()
@@ -74,7 +77,7 @@ class CheckoutSessionController extends Controller
     public function options()
     {
         $checkouts = CheckoutSession::with('gameSessions.table')
-            ->where('status', 'open')
+            ->open()
             ->orderByDesc('id')
             ->get()
             ->map(function (CheckoutSession $c) {
@@ -92,7 +95,7 @@ class CheckoutSessionController extends Controller
     /** JSON summary for payment modal (same shape as table checkout-summary). */
     public function summary(CheckoutSession $checkout)
     {
-        if ($checkout->status !== 'open') {
+        if (! $checkout->isOpen()) {
             abort(404);
         }
         $totals = $this->checkoutTotals($checkout);
@@ -119,7 +122,7 @@ class CheckoutSessionController extends Controller
 
     public function addItem(Request $request, CheckoutSession $checkout)
     {
-        if ($checkout->status !== 'open') {
+        if (! $checkout->isOpen()) {
             return back()->withErrors(['checkout' => 'This tab is already closed.']);
         }
 
@@ -135,7 +138,7 @@ class CheckoutSessionController extends Controller
 
     public function addItemsBulk(Request $request, CheckoutSession $checkout)
     {
-        if ($checkout->status !== 'open') {
+        if (! $checkout->isOpen()) {
             return back()->withErrors(['checkout' => 'This tab is already closed.']);
         }
 
@@ -161,7 +164,7 @@ class CheckoutSessionController extends Controller
             'items.*.quantity' => ['required', 'integer', 'min:1'],
         ]);
 
-        $checkout = CheckoutSession::create(['status' => 'open']);
+        $checkout = CheckoutSession::create(['status' => CheckoutSession::STATUS_OPEN]);
 
         foreach ($data['items'] as $item) {
             $this->addProductToCheckout($checkout, (int) $item['product_id'], (int) $item['quantity']);
@@ -175,18 +178,12 @@ class CheckoutSessionController extends Controller
     private function addProductToCheckout(CheckoutSession $checkout, int $productId, int $quantity): void
     {
         $product = Product::findOrFail($productId);
-        $item = $checkout->items()->firstOrNew(['product_id' => $product->id]);
-        $item->quantity = ($item->exists ? $item->quantity : 0) + $quantity;
-        $item->product_name = $product->name;
-        $item->product_category = $product->category;
-        $item->unit_price = $product->price;
-        $item->total_price = round($item->quantity * $item->unit_price, 2);
-        $item->save();
+        PosItemUpserter::upsertCheckoutProduct($checkout, $product, $quantity, increment: true);
     }
 
     public function complete(Request $request, CheckoutSession $checkout)
     {
-        if ($checkout->status !== 'open') {
+        if (! $checkout->isOpen()) {
             return back()->withErrors(['checkout' => 'This tab is already closed.']);
         }
 
@@ -195,48 +192,18 @@ class CheckoutSessionController extends Controller
         $timeTotal = $totals['time_total'];
         $itemsTotal = $totals['items_total'];
 
-        $payments = $request->input('payments', []);
-        if (is_string($payments)) {
-            $payments = json_decode($payments, true) ?? [];
+        $normalizedPayments = PaymentPayload::normalizeForTotal(
+            PaymentPayload::fromRequest($request),
+            $grandTotal,
+            allowOverpay: true,
+        );
+        if ($normalizedPayments['error'] === 'minimum_total_required') {
+            return back()->withErrors(['payments' => 'Total paid must be at least the grand total.']);
         }
-        if (! is_array($payments)) {
-            $payments = [];
+        if ($normalizedPayments['error'] === 'card_transfer_exceeds') {
+            return back()->withErrors(['payments' => 'Card and transfer combined cannot exceed the grand total.']);
         }
-        if (empty($payments) && $request->getContent()) {
-            $decoded = json_decode($request->getContent(), true);
-            if (is_array($decoded['payments'] ?? null)) {
-                $payments = $decoded['payments'];
-            }
-        }
-
-        $validMethods = ['cash', 'card', 'transfer_qr'];
-        $validPayments = [];
-        $totalPaid = 0;
-        if (! empty($payments)) {
-            foreach ($payments as $p) {
-                $method = $p['method'] ?? null;
-                $amount = isset($p['amount']) ? (float) $p['amount'] : 0;
-                if (! in_array($method, $validMethods, true) || $amount <= 0) {
-                    continue;
-                }
-                $validPayments[] = ['method' => $method, 'amount' => round($amount, 2)];
-                $totalPaid += round($amount, 2);
-            }
-            if ($totalPaid + 0.01 < $grandTotal) {
-                return back()->withErrors(['payments' => 'Total paid must be at least the grand total.']);
-            }
-            $cardTransferTotal = 0;
-            foreach ($validPayments as $vp) {
-                if (($vp['method'] ?? '') === 'card' || ($vp['method'] ?? '') === 'transfer_qr') {
-                    $cardTransferTotal += $vp['amount'];
-                }
-            }
-            if ($cardTransferTotal > $grandTotal + 0.01) {
-                return back()->withErrors(['payments' => 'Card and transfer combined cannot exceed the grand total.']);
-            }
-        } else {
-            $validPayments = $grandTotal > 0 ? [['method' => 'cash', 'amount' => $grandTotal]] : [];
-        }
+        $validPayments = $normalizedPayments['payments'];
 
         $customerEmail = $request->input('customer_email') ? trim((string) $request->input('customer_email')) : null;
         if ($customerEmail !== null && $customerEmail === '') {
@@ -271,7 +238,7 @@ class CheckoutSessionController extends Controller
         $receipt = Receipt::with(['checkoutSession.gameSessions.table', 'checkoutSession.gameSessions.items', 'checkoutSession.items', 'payments'])
             ->findOrFail($receiptId);
 
-        $ratePerMinute = 0.20;
+        $ratePerMinute = (float) config('pos.rate_per_minute', 0.20);
         $lineItems = [];
         foreach ($receipt->checkoutSession->gameSessions as $session) {
             if ($session->time_total > 0 && $session->started_at && $session->ended_at) {
@@ -321,28 +288,7 @@ class CheckoutSessionController extends Controller
             'payments' => $receipt->payments->map(fn ($p) => ['method' => $p->method, 'amount' => (float) $p->amount])->all(),
         ];
 
-        // Create receipt snapshot line items (admin-editable) if missing.
-        if ($receipt->lineItems()->count() === 0) {
-            $rows = collect($invoicePayload['line_items'])->map(function (array $li) {
-                $type = (string) ($li['type'] ?? 'product');
-                $quantity = (float) ($li['quantity'] ?? 1);
-                $unitPrice = (float) ($li['unit_price'] ?? ($li['rate'] ?? 0));
-                $subtotal = (float) ($li['subtotal'] ?? 0);
-
-                return [
-                    'type' => $type,
-                    'description' => (string) ($li['description'] ?? ''),
-                    'quantity' => $quantity,
-                    'unit_price' => $unitPrice,
-                    'subtotal' => $subtotal,
-                    'meta' => array_diff_key($li, array_flip(['type', 'description', 'quantity', 'unit_price', 'rate', 'subtotal'])),
-                ];
-            })->filter(fn ($r) => trim((string) $r['description']) !== '')->values()->all();
-
-            foreach ($rows as $r) {
-                $receipt->lineItems()->create($r);
-            }
-        }
+        ReceiptLineItemSnapshot::ensureFromPayload($receipt, $invoicePayload['line_items']);
 
         if ($request->expectsJson()) {
             return response()->json([
@@ -363,14 +309,14 @@ class CheckoutSessionController extends Controller
             'source_ids.*' => ['integer', 'different:target_id'],
         ]);
 
-        $target = CheckoutSession::where('status', 'open')->findOrFail($data['target_id']);
+        $target = CheckoutSession::query()->open()->findOrFail($data['target_id']);
 
         $sourceIds = collect($data['source_ids'])->unique()->filter(fn ($id) => (int) $id !== (int) $target->id)->all();
         if (empty($sourceIds)) {
             return back()->withErrors(['merge' => 'Select at least one other tab to merge.']);
         }
 
-        $sources = CheckoutSession::where('status', 'open')
+        $sources = CheckoutSession::query()->open()
             ->whereIn('id', $sourceIds)
             ->get();
 
