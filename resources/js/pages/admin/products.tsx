@@ -216,6 +216,13 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
     }));
 
   const cartTotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const cashValuePreview = parseFloat(cash) || 0;
+  const cardValuePreview = parseFloat(card) || 0;
+  const transferValuePreview = parseFloat(transfer) || 0;
+  const totalPaidPreview = Math.round((cashValuePreview + cardValuePreview + transferValuePreview) * 100) / 100;
+  const expectedPreview = Math.round(cartTotal * 100) / 100;
+  const changePreview = Math.max(0, Math.round((totalPaidPreview - expectedPreview) * 100) / 100);
+  const amountDuePreview = Math.max(0, Math.round((expectedPreview - totalPaidPreview) * 100) / 100);
 
   const handleOpenActions = () => {
     setPosError(null);
@@ -323,8 +330,13 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
     const transferValue = parseFloat(transfer) || 0;
     const totalPaid = Math.round((cashValue + cardValue + transferValue) * 100) / 100;
     const expected = Math.round(cartTotal * 100) / 100;
-    if (Math.round(totalPaid * 100) !== Math.round(expected * 100)) {
-      setPosError(`Total paid must equal ${money(expected)}.`);
+    if (totalPaid + 0.01 < expected) {
+      setPosError(`Total paid must be at least ${money(expected)}.`);
+      return;
+    }
+    const nonCashTotal = Math.round((cardValue + transferValue) * 100) / 100;
+    if (nonCashTotal > expected + 0.01) {
+      setPosError('Card and transfer combined cannot exceed the cart total.');
       return;
     }
     const payments: { method: string; amount: number }[] = [];
@@ -635,13 +647,28 @@ export default function AdminProducts({ products, openCheckouts, runningTables, 
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Pay products</DialogTitle>
-            <DialogDescription>Split payment. Total paid must equal cart total.</DialogDescription>
+            <DialogDescription>Split payment. Cash may exceed total to return change.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div className="flex justify-between text-sm font-semibold">
               <span>Cart total</span>
               <span>{money(cartTotal)}</span>
             </div>
+            <div className="flex justify-between text-sm">
+              <span>Total paid</span>
+              <span>{money(totalPaidPreview)}</span>
+            </div>
+            {changePreview > 0 ? (
+              <div className="flex justify-between text-sm font-semibold text-emerald-600">
+                <span>Change</span>
+                <span>{money(changePreview)}</span>
+              </div>
+            ) : (
+              <div className="flex justify-between text-sm text-muted-foreground">
+                <span>Amount due</span>
+                <span>{money(amountDuePreview)}</span>
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <label className="w-24 shrink-0 text-sm text-muted-foreground">Cash</label>
               <Input type="number" step="0.01" min={0} value={cash} onChange={(e) => setCash(e.target.value)} />

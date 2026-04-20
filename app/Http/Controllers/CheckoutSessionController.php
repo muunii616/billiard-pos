@@ -222,8 +222,8 @@ class CheckoutSessionController extends Controller
                 $validPayments[] = ['method' => $method, 'amount' => round($amount, 2)];
                 $totalPaid += round($amount, 2);
             }
-            if (abs($totalPaid - $grandTotal) > 0.01) {
-                return back()->withErrors(['payments' => 'Total paid must equal grand total.']);
+            if ($totalPaid + 0.01 < $grandTotal) {
+                return back()->withErrors(['payments' => 'Total paid must be at least the grand total.']);
             }
             $cardTransferTotal = 0;
             foreach ($validPayments as $vp) {
