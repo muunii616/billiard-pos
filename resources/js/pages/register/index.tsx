@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import AppLayout from '@/layouts/app-layout';
+import { formatMoney } from '@/lib/payments';
 import type { BreadcrumbItem } from '@/types';
 
 type CashSessionInfo = {
@@ -46,7 +47,7 @@ headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
 }
 
 export default function RegisterPage() {
-  const money = (value: number) => `$${(Number(value) || 0).toFixed(2)}`;
+  const money = formatMoney;
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

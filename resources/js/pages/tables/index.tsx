@@ -24,7 +24,21 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import AppLayout from '@/layouts/app-layout';
+import {
+  buildExactSettlementPayments,
+  clampNonCashInput,
+  formatMoney,
+  paymentPreview,
+  roundMoney,
+} from '@/lib/payments';
 import receiptsRoutes from '@/routes/receipts';
 import tablesRoutes from '@/routes/tables';
 import type { BreadcrumbItem } from '@/types';
@@ -114,36 +128,6 @@ type CheckoutSummary = {
   grand_total: number;
 };
 
-function roundMoney(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-function limitCardOrTransferValue(raw: string, maxAllowed: number): string {
-  const cap = Math.max(0, roundMoney(maxAllowed));
-
-  if (raw === '') {
-return '';
-}
-
-  const n = parseFloat(raw);
-
-  if (Number.isNaN(n)) {
-return raw;
-}
-
-  if (n < 0) {
-return '0';
-}
-
-  const clamped = Math.min(n, cap);
-
-  if (clamped !== n) {
-return clamped === 0 ? '' : String(clamped);
-}
-
-  return raw;
-}
-
 function adminJsonHeaders(): Record<string, string> {
   const csrfToken = document.cookie.split('; ').find((r) => r.startsWith('XSRF-TOKEN='))?.split('=')[1];
   const headers: Record<string, string> = {
@@ -219,7 +203,8 @@ export default function TablesIndex({ tables, products, receipt: receiptProp, is
   const [isTouchDevice, setIsTouchDevice] = useState(false);
   const [activeMobileTableId, setActiveMobileTableId] = useRemember<number | null>(null, 'tables.activeMobileTableId');
   const [tabSuccessMessage, setTabSuccessMessage] = useState<string | null>(null);
-  const money = (value: number) => `$${(Number(value) || 0).toFixed(2)}`;
+  const [tabErrorMessage, setTabErrorMessage] = useState<string | null>(null);
+  const money = formatMoney;
   const checkoutGrandTotalNum =
     checkoutOpen && checkoutSummary ? roundMoney(Number(checkoutSummary.grand_total)) : 0;
   const checkoutCardNum = roundMoney(parseFloat(card) || 0);
@@ -250,7 +235,7 @@ return;
     const newD = Math.min(d, Math.max(0, g - newT));
     setCard(newD === 0 ? '' : String(newD));
     setTransfer(newT === 0 ? '' : String(newT));
-  }, [checkoutOpen, checkoutSummary?.session_id, checkoutSummary?.grand_total]);
+  }, [card, checkoutOpen, checkoutSummary, transfer]);
 
   const pageErrors = (usePage().props as { errors?: Record<string, string> }).errors ?? {};
 
@@ -262,16 +247,17 @@ setInvoiceReceipt(receiptProp);
   }, [receiptProp]);
 
   useEffect(() => {
-    if (!tabSuccessMessage) {
+    if (!tabSuccessMessage && !tabErrorMessage) {
       return;
     }
 
     const timeoutId = window.setTimeout(() => {
       setTabSuccessMessage(null);
+      setTabErrorMessage(null);
     }, 3500);
 
     return () => window.clearTimeout(timeoutId);
-  }, [tabSuccessMessage]);
+  }, [tabErrorMessage, tabSuccessMessage]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -312,7 +298,7 @@ setActiveMobileTableId(null);
     media.addEventListener('change', sync);
 
     return () => media.removeEventListener('change', sync);
-  }, []);
+  }, [setActiveMobileTableId]);
 
   const getElapsedSeconds = useCallback((table: Table): number | null => {
     const session = table.current_session;
@@ -546,70 +532,23 @@ return;
 return;
 }
 
-    const cashNum = parseFloat(cash) || 0;
-    const cardNum = parseFloat(card) || 0;
-    const transferNum = parseFloat(transfer) || 0;
-    const grandTotal = Math.round(Number(checkoutSummary.grand_total) * 100) / 100;
-    const cardTransferSum = Math.round((cardNum + transferNum) * 100) / 100;
+    const settlement = buildExactSettlementPayments({
+      expected: Number(checkoutSummary.grand_total) || 0,
+      cash: parseFloat(cash) || 0,
+      card: parseFloat(card) || 0,
+      transfer: parseFloat(transfer) || 0,
+      money,
+    });
 
-    if (cardTransferSum > grandTotal + 0.01) {
-      setCheckoutError(
-        `Card plus transfer (${money(cardTransferSum)}) cannot exceed grand total (${money(grandTotal)}). Reduce card or transfer, or use cash for the rest.`,
-      );
-
-      return;
-    }
-
-    const totalEntered = Math.round((cashNum + cardNum + transferNum) * 100) / 100;
-    const change = Math.round((totalEntered - grandTotal) * 100) / 100;
-
-    if (totalEntered + 1e-9 < grandTotal) {
-      setCheckoutError(`Total paid (${money(totalEntered)}) must be at least grand total (${money(grandTotal)}).`);
-
-      return;
-    }
-
-    if (change > 0.01 && cashNum + 1e-9 < change) {
-      setCheckoutError(
-        `Change is ${money(change)}. Cash (${money(cashNum)}) must cover change when the customer is due cash back.`,
-      );
-
-      return;
-    }
-
-    const cashApplied = change > 0.01 ? Math.round((cashNum - change) * 100) / 100 : cashNum;
-
-    if (cashApplied < -0.01) {
-      setCheckoutError('Invalid cash amount.');
+    if (settlement.error) {
+      setCheckoutError(settlement.error);
 
       return;
     }
 
     setCheckoutError(null);
-    const payments: { method: string; amount: number }[] = [];
-
-    if (cardNum > 0) {
-      payments.push({ method: 'card', amount: cardNum });
-    }
-
-    if (transferNum > 0) {
-      payments.push({ method: 'transfer_qr', amount: transferNum });
-    }
-
-    if (cashApplied > 0) {
-      payments.push({ method: 'cash', amount: cashApplied });
-    }
-
-    const paymentsSum = Math.round(payments.reduce((s, p) => s + p.amount, 0) * 100) / 100;
-
-    if (Math.abs(paymentsSum - grandTotal) > 0.02) {
-      setCheckoutError('Could not balance payment split. Check amounts.');
-
-      return;
-    }
-
     const url = tablesRoutes.end.url({ table: checkoutSummary.table_id });
-    const payload: { payments: { method: string; amount: number }[]; customer_email?: string } = { payments };
+    const payload: { payments: { method: string; amount: number }[]; customer_email?: string } = { payments: settlement.payments };
 
     if (customerEmail.trim()) {
 payload.customer_email = customerEmail.trim();
@@ -797,7 +736,7 @@ headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
 
   const handleAddItem = (tableId: number) => {
     if (products.length === 0) {
-      alert('No products available.');
+      setTabErrorMessage('No products available.');
 
       return;
     }
@@ -940,6 +879,14 @@ return;
               <CheckCircle2Icon />
               <AlertTitle>Success</AlertTitle>
               <AlertDescription>{tabSuccessMessage}</AlertDescription>
+            </Alert>
+          </div>
+        )}
+        {tabErrorMessage && (
+          <div className="pointer-events-none fixed left-1/2 top-6 z-50 w-full max-w-md -translate-x-1/2 px-2 sm:px-0">
+            <Alert variant="destructive">
+              <AlertTitle>Action failed</AlertTitle>
+              <AlertDescription>{tabErrorMessage}</AlertDescription>
             </Alert>
           </div>
         )}
@@ -1495,15 +1442,18 @@ closeEditSessionItems();
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="edit-status">Status</Label>
-                  <select
-                    id="edit-status"
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  <Select
                     value={editTable.status}
-                    onChange={(e) => setEditTable((prev) => (prev ? { ...prev, status: e.target.value } : prev))}
+                    onValueChange={(value) => setEditTable((prev) => (prev ? { ...prev, status: value } : prev))}
                   >
-                    <option value="available">Available</option>
-                    <option value="maintenance">Maintenance</option>
-                  </select>
+                    <SelectTrigger id="edit-status" className="w-full">
+                      <SelectValue placeholder="Select status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="available">Available</SelectItem>
+                      <SelectItem value="maintenance">Maintenance</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <DialogFooter className="flex flex-col gap-2 sm:flex-row">
                   <Button variant="outline" onClick={() => setEditTable(null)}>Cancel</Button>
@@ -1586,45 +1536,45 @@ closeEditSessionItems();
                     <span>{money(checkoutSummary.grand_total)}</span>
                   </div>
                   {(() => {
-                    const c = parseFloat(cash) || 0;
-                    const d = parseFloat(card) || 0;
-                    const t = parseFloat(transfer) || 0;
-                    const g = Number(checkoutSummary.grand_total) || 0;
-                    const entered = Math.round((c + d + t) * 100) / 100;
-                    const ch = Math.round((entered - g) * 100) / 100;
+                    const preview = paymentPreview(
+                      parseFloat(cash) || 0,
+                      parseFloat(card) || 0,
+                      parseFloat(transfer) || 0,
+                      Number(checkoutSummary.grand_total) || 0,
+                    );
 
-                    if (c <= 0 && d <= 0 && t <= 0) {
+                    if (preview.cashValue <= 0 && preview.cardValue <= 0 && preview.transferValue <= 0) {
 return null;
 }
 
                     return (
                       <>
-                        {d > 0 && (
+                        {preview.cardValue > 0 && (
                           <div className="flex justify-between border-t border-border/60 pt-2">
                             <span className="text-muted-foreground">Card</span>
-                            <span>{money(d)}</span>
+                            <span>{money(preview.cardValue)}</span>
                           </div>
                         )}
-                        {t > 0 && (
+                        {preview.transferValue > 0 && (
                           <div className="flex justify-between">
                             <span className="text-muted-foreground">Transfer</span>
-                            <span>{money(t)}</span>
+                            <span>{money(preview.transferValue)}</span>
                           </div>
                         )}
-                        {c > 0 && (
+                        {preview.cashValue > 0 && (
                           <div className="flex justify-between">
                             <span className="text-muted-foreground">Cash</span>
-                            <span>{money(c)}</span>
+                            <span>{money(preview.cashValue)}</span>
                           </div>
                         )}
                         <div className="flex justify-between text-muted-foreground">
                           <span>Total received</span>
-                          <span>{money(entered)}</span>
+                          <span>{money(preview.totalPaid)}</span>
                         </div>
-                        {ch > 0.01 && (
+                        {preview.change > 0.01 && (
                           <div className="flex justify-between font-medium text-emerald-600 dark:text-emerald-400">
                             <span>Change</span>
-                            <span>- {money(ch)}</span>
+                            <span>- {money(preview.change)}</span>
                           </div>
                         )}
                       </>
@@ -1657,7 +1607,7 @@ return null;
                       value={card}
                       onChange={(e) => {
                         setCheckoutError(null);
-                        setCard(limitCardOrTransferValue(e.target.value, maxCardAmount));
+                        setCard(clampNonCashInput(e.target.value, maxCardAmount));
                       }}
                     />
                   </div>
@@ -1673,7 +1623,7 @@ return null;
                       value={transfer}
                       onChange={(e) => {
                         setCheckoutError(null);
-                        setTransfer(limitCardOrTransferValue(e.target.value, maxTransferAmount));
+                        setTransfer(clampNonCashInput(e.target.value, maxTransferAmount));
                       }}
                     />
                   </div>

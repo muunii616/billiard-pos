@@ -1,6 +1,7 @@
 import { Head, router, usePage } from '@inertiajs/react';
 import { Pencil, Wallet } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,6 +24,13 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import AppLayout from '@/layouts/app-layout';
+import {
+  buildExactSettlementPayments,
+  clampNonCashInput,
+  formatMoney,
+  paymentPreview,
+  roundMoney,
+} from '@/lib/payments';
 import receiptsRoutes from '@/routes/receipts';
 import type { BreadcrumbItem } from '@/types';
 
@@ -95,37 +103,6 @@ type Props = {
   isAdmin?: boolean;
 };
 
-function roundMoney(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-/** Card/transfer share a cap of grand total; clamp one field against the other. */
-function limitCardOrTransferValue(raw: string, maxAllowed: number): string {
-  const cap = Math.max(0, roundMoney(maxAllowed));
-
-  if (raw === '') {
-return '';
-}
-
-  const n = parseFloat(raw);
-
-  if (Number.isNaN(n)) {
-return raw;
-}
-
-  if (n < 0) {
-return '0';
-}
-
-  const clamped = Math.min(n, cap);
-
-  if (clamped !== n) {
-return clamped === 0 ? '' : String(clamped);
-}
-
-  return raw;
-}
-
 function adminJsonHeaders(): Record<string, string> {
   const csrfToken = document.cookie.split('; ').find((r) => r.startsWith('XSRF-TOKEN='))?.split('=')[1];
   const headers: Record<string, string> = {
@@ -172,7 +149,7 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
   const [editTabItemsLoading, setEditTabItemsLoading] = useState(false);
   const [editTabItemsSaving, setEditTabItemsSaving] = useState(false);
   const [editTabItemsError, setEditTabItemsError] = useState<string | null>(null);
-  const money = (value: number) => `$${(Number(value) || 0).toFixed(2)}`;
+  const money = formatMoney;
   const payGrandTotalNum =
     payModalOpen && summary ? roundMoney(Number(summary.grand_total)) : 0;
   const cardAmountNum = roundMoney(parseFloat(card) || 0);
@@ -188,6 +165,7 @@ export default function CheckoutsIndex({ checkouts, products, receipt: receiptPr
   const [deleteTabId, setDeleteTabId] = useState<number | null>(null);
   const [reopenTabConfirmOpen, setReopenTabConfirmOpen] = useState(false);
   const [reopenTabId, setReopenTabId] = useState<number | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!payModalOpen || !summary) {
@@ -206,7 +184,7 @@ return;
     const newD = Math.min(d, Math.max(0, g - newT));
     setCard(newD === 0 ? '' : String(newD));
     setTransfer(newT === 0 ? '' : String(newT));
-  }, [payModalOpen, summary?.checkout_id, summary?.grand_total]);
+  }, [card, payModalOpen, summary, transfer]);
 
   const pageErrors = (usePage().props as { errors?: Record<string, string> }).errors ?? {};
 
@@ -236,6 +214,18 @@ return;
 setPayError(pageErrors.payments);
 }
   }, [payModalOpen, pageErrors.payments]);
+
+  useEffect(() => {
+    if (!actionError) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setActionError(null);
+    }, 3500);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [actionError]);
 
   useEffect(() => {
     router.get('/checkouts', showAll ? { all: 1 } : {}, {
@@ -361,73 +351,28 @@ return;
 return;
 }
 
-    const cashNum = parseFloat(cash) || 0;
-    const cardNum = parseFloat(card) || 0;
-    const transferNum = parseFloat(transfer) || 0;
-    const grandTotal = Math.round(Number(summary.grand_total) * 100) / 100;
-    const cardTransferSum = Math.round((cardNum + transferNum) * 100) / 100;
+    const settlement = buildExactSettlementPayments({
+      expected: Number(summary.grand_total) || 0,
+      cash: parseFloat(cash) || 0,
+      card: parseFloat(card) || 0,
+      transfer: parseFloat(transfer) || 0,
+      money,
+    });
 
-    if (cardTransferSum > grandTotal + 0.01) {
-      setPayError(
-        `Card plus transfer (${money(cardTransferSum)}) cannot exceed grand total (${money(grandTotal)}). Reduce card or transfer, or use cash for the rest.`,
-      );
-
-      return;
-    }
-
-    const totalEntered = Math.round((cashNum + cardNum + transferNum) * 100) / 100;
-    const change = Math.round((totalEntered - grandTotal) * 100) / 100;
-
-    if (totalEntered + 1e-9 < grandTotal) {
-      setPayError(`Total paid (${money(totalEntered)}) must be at least grand total (${money(grandTotal)}).`);
-
-      return;
-    }
-
-    if (change > 0.01 && cashNum + 1e-9 < change) {
-      setPayError(
-        `Change is ${money(change)}. Cash (${money(cashNum)}) must cover change when the customer is due cash back.`,
-      );
-
-      return;
-    }
-
-    const cashApplied = change > 0.01 ? Math.round((cashNum - change) * 100) / 100 : cashNum;
-
-    if (cashApplied < -0.01) {
-      setPayError('Invalid cash amount.');
+    if (settlement.error) {
+      setPayError(settlement.error);
 
       return;
     }
 
     setPayError(null);
-    const payments: { method: string; amount: number }[] = [];
-
-    if (cardNum > 0) {
-      payments.push({ method: 'card', amount: cardNum });
-    }
-
-    if (transferNum > 0) {
-      payments.push({ method: 'transfer_qr', amount: transferNum });
-    }
-
-    if (cashApplied > 0) {
-      payments.push({ method: 'cash', amount: cashApplied });
-    }
-
-    const paymentsSum = Math.round(payments.reduce((s, p) => s + p.amount, 0) * 100) / 100;
-
-    if (Math.abs(paymentsSum - grandTotal) > 0.02) {
-      setPayError('Could not balance payment split. Check amounts.');
-
-      return;
-    }
-
-    const payload: { payments: { method: string; amount: number }[]; customer_email?: string } = { payments };
+    const payload: { payments: { method: string; amount: number }[]; customer_email?: string } = {
+      payments: settlement.payments,
+    };
 
     if (customerEmail.trim()) {
-payload.customer_email = customerEmail.trim();
-}
+      payload.customer_email = customerEmail.trim();
+    }
 
     setSubmitting(true);
     router.post(`/checkouts/${payCheckoutId}/complete`, payload, {
@@ -484,7 +429,7 @@ headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
 
   const handleMergeTabs = () => {
     if (selectedIds.length < 2) {
-      alert('Select at least two tabs to merge.');
+      setActionError('Select at least two tabs to merge.');
 
       return;
     }
@@ -509,7 +454,7 @@ headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
 
   const openAddItemModal = (checkoutId: number) => {
     if (products.length === 0) {
-      alert('No products available.');
+      setActionError('No products available.');
 
       return;
     }
@@ -616,7 +561,7 @@ return;
     setDeleteTabId(null);
 
     if (!res.ok) {
-      alert(data.message || 'Failed to delete tab.');
+      setActionError(data.message || 'Failed to delete tab.');
 
       return;
     }
@@ -640,7 +585,7 @@ return;
     setReopenTabId(null);
 
     if (!res.ok) {
-      alert(data.message || 'Failed to reopen tab.');
+      setActionError(data.message || 'Failed to reopen tab.');
 
       return;
     }
@@ -652,6 +597,14 @@ return;
     <AppLayout breadcrumbs={breadcrumbs}>
       <Head title="Open tab" />
       <div className="flex flex-1 flex-col gap-4 rounded-xl p-4">
+        {actionError && (
+          <div className="pointer-events-none fixed left-1/2 top-6 z-50 w-full max-w-md -translate-x-1/2 px-2 sm:px-0">
+            <Alert variant="destructive">
+              <AlertTitle>Action failed</AlertTitle>
+              <AlertDescription>{actionError}</AlertDescription>
+            </Alert>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-xl font-semibold">Open tab</h1>
           <div className="flex items-center gap-2">
@@ -1068,45 +1021,45 @@ closeEditTabItems();
                     <span>{money(summary.grand_total)}</span>
                   </div>
                   {(() => {
-                    const c = parseFloat(cash) || 0;
-                    const d = parseFloat(card) || 0;
-                    const t = parseFloat(transfer) || 0;
-                    const g = Number(summary.grand_total) || 0;
-                    const entered = Math.round((c + d + t) * 100) / 100;
-                    const ch = Math.round((entered - g) * 100) / 100;
+                    const preview = paymentPreview(
+                      parseFloat(cash) || 0,
+                      parseFloat(card) || 0,
+                      parseFloat(transfer) || 0,
+                      Number(summary.grand_total) || 0,
+                    );
 
-                    if (c <= 0 && d <= 0 && t <= 0) {
+                    if (preview.cashValue <= 0 && preview.cardValue <= 0 && preview.transferValue <= 0) {
 return null;
 }
 
                     return (
                       <>
-                        {d > 0 && (
+                        {preview.cardValue > 0 && (
                           <div className="flex justify-between border-t border-border/60 pt-2">
                             <span className="text-muted-foreground">Card</span>
-                            <span>{money(d)}</span>
+                            <span>{money(preview.cardValue)}</span>
                           </div>
                         )}
-                        {t > 0 && (
+                        {preview.transferValue > 0 && (
                           <div className="flex justify-between">
                             <span className="text-muted-foreground">Transfer</span>
-                            <span>{money(t)}</span>
+                            <span>{money(preview.transferValue)}</span>
                           </div>
                         )}
-                        {c > 0 && (
+                        {preview.cashValue > 0 && (
                           <div className="flex justify-between">
                             <span className="text-muted-foreground">Cash</span>
-                            <span>{money(c)}</span>
+                            <span>{money(preview.cashValue)}</span>
                           </div>
                         )}
                         <div className="flex justify-between text-muted-foreground">
                           <span>Total received</span>
-                          <span>{money(entered)}</span>
+                          <span>{money(preview.totalPaid)}</span>
                         </div>
-                        {ch > 0.01 && (
+                        {preview.change > 0.01 && (
                           <div className="flex justify-between font-medium text-emerald-600 dark:text-emerald-400">
                             <span>Change</span>
-                            <span>- {money(ch)}</span>
+                            <span>- {money(preview.change)}</span>
                           </div>
                         )}
                       </>
@@ -1139,7 +1092,7 @@ return null;
                       value={card}
                       onChange={(e) => {
                         setPayError(null);
-                        setCard(limitCardOrTransferValue(e.target.value, maxCardAmount));
+                        setCard(clampNonCashInput(e.target.value, maxCardAmount));
                       }}
                     />
                   </div>
@@ -1155,7 +1108,7 @@ return null;
                       value={transfer}
                       onChange={(e) => {
                         setPayError(null);
-                        setTransfer(limitCardOrTransferValue(e.target.value, maxTransferAmount));
+                        setTransfer(clampNonCashInput(e.target.value, maxTransferAmount));
                       }}
                     />
                   </div>

@@ -20,6 +20,12 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import AppLayout from '@/layouts/app-layout';
+import {
+  buildRawPayments,
+  formatMoney,
+  paymentPreview,
+  validateOverpayAllowed,
+} from '@/lib/payments';
 import type { BreadcrumbItem } from '@/types';
 
 type Product = {
@@ -57,7 +63,7 @@ const breadcrumbs: BreadcrumbItem[] = [
 
 export default function AdminProducts({ products, openCheckouts, runningTables, isAdmin = false }: Props) {
   const DEFAULT_CATEGORIES = ['Drinks', 'Snacks', 'Sets'] as const;
-  const money = (value: number) => `$${(Number(value) || 0).toFixed(2)}`;
+  const money = formatMoney;
 
   const normalizeCategory = (raw: string): string => {
     const value = (raw || '').trim();
@@ -232,13 +238,12 @@ return 'Sets';
     }));
 
   const cartTotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const cashValuePreview = parseFloat(cash) || 0;
-  const cardValuePreview = parseFloat(card) || 0;
-  const transferValuePreview = parseFloat(transfer) || 0;
-  const totalPaidPreview = Math.round((cashValuePreview + cardValuePreview + transferValuePreview) * 100) / 100;
-  const expectedPreview = Math.round(cartTotal * 100) / 100;
-  const changePreview = Math.max(0, Math.round((totalPaidPreview - expectedPreview) * 100) / 100);
-  const amountDuePreview = Math.max(0, Math.round((expectedPreview - totalPaidPreview) * 100) / 100);
+  const preview = paymentPreview(
+    parseFloat(cash) || 0,
+    parseFloat(card) || 0,
+    parseFloat(transfer) || 0,
+    cartTotal,
+  );
 
   const handleOpenActions = () => {
     setPosError(null);
@@ -354,39 +359,25 @@ return 'Sets';
       return;
     }
 
-    const cashValue = parseFloat(cash) || 0;
-    const cardValue = parseFloat(card) || 0;
-    const transferValue = parseFloat(transfer) || 0;
-    const totalPaid = Math.round((cashValue + cardValue + transferValue) * 100) / 100;
-    const expected = Math.round(cartTotal * 100) / 100;
+    const validation = validateOverpayAllowed({
+      expected: cartTotal,
+      cash: parseFloat(cash) || 0,
+      card: parseFloat(card) || 0,
+      transfer: parseFloat(transfer) || 0,
+      money,
+    });
 
-    if (totalPaid + 0.01 < expected) {
-      setPosError(`Total paid must be at least ${money(expected)}.`);
-
-      return;
-    }
-
-    const nonCashTotal = Math.round((cardValue + transferValue) * 100) / 100;
-
-    if (nonCashTotal > expected + 0.01) {
-      setPosError('Card and transfer combined cannot exceed the cart total.');
+    if (validation.error) {
+      setPosError(validation.error.replaceAll('grand total', 'cart total'));
 
       return;
     }
 
-    const payments: { method: string; amount: number }[] = [];
-
-    if (cashValue > 0) {
-payments.push({ method: 'cash', amount: cashValue });
-}
-
-    if (cardValue > 0) {
-payments.push({ method: 'card', amount: cardValue });
-}
-
-    if (transferValue > 0) {
-payments.push({ method: 'transfer_qr', amount: transferValue });
-}
+    const payments = buildRawPayments(
+      parseFloat(cash) || 0,
+      parseFloat(card) || 0,
+      parseFloat(transfer) || 0,
+    );
 
     setPaying(true);
 
@@ -704,17 +695,17 @@ payments.push({ method: 'transfer_qr', amount: transferValue });
             </div>
             <div className="flex justify-between text-sm">
               <span>Total paid</span>
-              <span>{money(totalPaidPreview)}</span>
+              <span>{money(preview.totalPaid)}</span>
             </div>
-            {changePreview > 0 ? (
+            {preview.change > 0 ? (
               <div className="flex justify-between text-sm font-semibold text-emerald-600">
                 <span>Change</span>
-                <span>{money(changePreview)}</span>
+                <span>{money(preview.change)}</span>
               </div>
             ) : (
               <div className="flex justify-between text-sm text-muted-foreground">
                 <span>Amount due</span>
-                <span>{money(amountDuePreview)}</span>
+                <span>{money(preview.amountDue)}</span>
               </div>
             )}
             <div className="flex items-center gap-2">

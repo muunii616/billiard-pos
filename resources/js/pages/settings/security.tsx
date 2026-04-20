@@ -2,7 +2,6 @@ import { Transition } from '@headlessui/react';
 import { Form, Head } from '@inertiajs/react';
 import { ShieldCheck } from 'lucide-react';
 import { useRef, useState } from 'react';
-import SecurityController from '@/actions/App/Http/Controllers/Settings/SecurityController';
 import Heading from '@/components/heading';
 import InputError from '@/components/input-error';
 import PasswordInput from '@/components/password-input';
@@ -65,7 +64,8 @@ export default function Security({
                     />
 
                     <Form
-                        {...SecurityController.update.form()}
+                        action="/settings/password"
+                        method="put"
                         options={{
                             preserveScroll: true,
                         }}

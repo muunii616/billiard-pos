@@ -47,6 +47,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import AppLayout from '@/layouts/app-layout';
+import { formatMoney } from '@/lib/payments';
 import type { BreadcrumbItem } from '@/types';
 
 type Summary = {
@@ -113,7 +114,7 @@ export default function Overview({
 }: Props) {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [monthlyYear, setMonthlyYear] = useState<number>(() => Number(month.slice(0, 4)) || new Date().getFullYear());
-  const money = (value: number) => `$${(Number(value) || 0).toFixed(2)}`;
+  const money = formatMoney;
   const { auth } = usePage().props as { auth?: { user?: { role?: string } } };
   const adminEnabled = isAdmin || auth?.user?.role === 'admin';
 

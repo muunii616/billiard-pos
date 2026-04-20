@@ -1,5 +1,16 @@
 import { Head, router, useForm, usePage } from '@inertiajs/react';
 import { useState } from 'react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -67,6 +78,8 @@ export default function AdminUsers({ users }: Props) {
   const currentUserId = auth.user.id;
   const [createOpen, setCreateOpen] = useState(false);
   const [editUser, setEditUser] = useState<User | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const { data, setData, post, reset, processing, errors } = useForm({
     name: '',
@@ -125,22 +138,35 @@ return;
 
   const handleDelete = (user: User) => {
     if (user.id === currentUserId) {
-      alert('You cannot delete your own account.');
+      setDeleteError('You cannot delete your own account.');
 
       return;
     }
 
-    if (!window.confirm(`Delete user "${user.name}"?`)) {
+    setDeleteError(null);
+    setDeleteTarget(user);
+  };
+
+  const confirmDelete = () => {
+    if (!deleteTarget) {
       return;
     }
 
-    router.delete(`/admin/users/${user.id}`);
+    router.delete(`/admin/users/${deleteTarget.id}`, {
+      onFinish: () => setDeleteTarget(null),
+    });
   };
 
   return (
     <AppLayout breadcrumbs={breadcrumbs}>
       <Head title="Users" />
       <div className="flex flex-1 flex-col gap-6 rounded-xl p-4">
+        {deleteError && (
+          <Alert variant="destructive">
+            <AlertTitle>Action failed</AlertTitle>
+            <AlertDescription>{deleteError}</AlertDescription>
+          </Alert>
+        )}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Users</h1>
@@ -407,6 +433,27 @@ closeEdit();
           </form>
         </DialogContent>
       </Dialog>
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete user?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget
+                ? `This will permanently delete "${deleteTarget.name}". This action cannot be undone.`
+                : 'This action cannot be undone.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmDelete}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppLayout>
   );
 }

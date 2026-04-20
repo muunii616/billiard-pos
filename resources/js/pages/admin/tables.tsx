@@ -12,7 +12,23 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import AppLayout from '@/layouts/app-layout';
 import type { BreadcrumbItem } from '@/types';
 
@@ -42,6 +58,10 @@ export default function AdminTables({ tables }: Props) {
     name: '',
   });
   const [deleteTarget, setDeleteTarget] = useState<Table | null>(null);
+  const [editTarget, setEditTarget] = useState<Table | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editStatus, setEditStatus] = useState<'available' | 'maintenance'>('available');
+  const [editError, setEditError] = useState<string | null>(null);
 
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,30 +70,32 @@ export default function AdminTables({ tables }: Props) {
     });
   };
 
-  const handleRename = (table: Table) => {
-    const name = window.prompt('New table name', table.name);
-
-    if (!name) {
-return;
-}
-
-    router.put(`/admin/tables/${table.id}`, { name });
+  const openEdit = (table: Table) => {
+    setEditTarget(table);
+    setEditName(table.name);
+    setEditStatus(table.status === 'maintenance' ? 'maintenance' : 'available');
+    setEditError(null);
   };
 
-  const handleStatus = (table: Table) => {
-    const status = window.prompt('Status (available/maintenance)', table.status);
+  const saveEdit = () => {
+    if (!editTarget) {
+      return;
+    }
 
-    if (!status) {
-return;
-}
+    const name = editName.trim();
 
-    if (!['available', 'maintenance'].includes(status)) {
-      alert('Only "available" or "maintenance" are allowed here.');
+    if (!name) {
+      setEditError('Table name is required.');
 
       return;
     }
 
-    router.put(`/admin/tables/${table.id}`, { status });
+    setEditError(null);
+    router.put(
+      `/admin/tables/${editTarget.id}`,
+      { name, status: editStatus },
+      { onSuccess: () => setEditTarget(null) },
+    );
   };
 
   const handleDelete = (table: Table) => {
@@ -130,11 +152,8 @@ return;
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <Button size="xs" variant="outline" onClick={() => handleRename(table)}>
-                    Rename
-                  </Button>
-                  <Button size="xs" variant="outline" onClick={() => handleStatus(table)}>
-                    Status
+                  <Button size="xs" variant="outline" onClick={() => openEdit(table)}>
+                    Edit
                   </Button>
                   <Button size="xs" variant="destructive" onClick={() => handleDelete(table)}>
                     Delete
@@ -166,6 +185,47 @@ return;
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={!!editTarget} onOpenChange={(open) => !open && setEditTarget(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Edit table</DialogTitle>
+            <DialogDescription>Update table name and availability status.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-table-name">Name</Label>
+              <Input
+                id="edit-table-name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder="Table name"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-table-status">Status</Label>
+              <Select value={editStatus} onValueChange={(value) => setEditStatus(value as 'available' | 'maintenance')}>
+                <SelectTrigger id="edit-table-status" className="w-full">
+                  <SelectValue placeholder="Select status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="available">Available</SelectItem>
+                  <SelectItem value="maintenance">Maintenance</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {editError && <p className="text-sm text-destructive">{editError}</p>}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setEditTarget(null)}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={saveEdit}>
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AppLayout>
   );
 }

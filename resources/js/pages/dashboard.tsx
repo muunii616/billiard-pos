@@ -2,6 +2,7 @@ import { Head, Link, router } from '@inertiajs/react';
 import { Wallet } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import AppLayout from '@/layouts/app-layout';
+import { formatMoney } from '@/lib/payments';
 import { dashboard } from '@/routes';
 import tablesRoutes from '@/routes/tables';
 import type { BreadcrumbItem } from '@/types';
@@ -181,18 +182,18 @@ return 'bg-emerald-500';
                                 <div className="flex justify-between">
                                     <span className="text-muted-foreground">Table time</span>
                                     <span className="tabular-nums font-medium">
-                                        ${(Number(today.revenue_time) || 0).toFixed(2)}
+                                        {formatMoney(Number(today.revenue_time) || 0)}
                                     </span>
                                 </div>
                                 <div className="flex justify-between">
                                     <span className="text-muted-foreground">Food & drinks</span>
                                     <span className="tabular-nums font-medium">
-                                        ${(Number(today.revenue_products) || 0).toFixed(2)}
+                                        {formatMoney(Number(today.revenue_products) || 0)}
                                     </span>
                                 </div>
                             </div>
                             <p className="mt-2 border-t border-sidebar-border/70 pt-2 text-xl font-semibold tabular-nums">
-                                ${(Number(today.revenue) || 0).toFixed(2)}
+                                {formatMoney(Number(today.revenue) || 0)}
                             </p>
                         </div>
                         <div className="rounded-xl border border-sidebar-border/70 bg-card p-4 shadow-sm dark:border-sidebar-border">
@@ -257,7 +258,7 @@ return 'bg-emerald-500';
                                                     {formatElapsed(liveElapsed)}
                                                     {liveBill != null && (
                                                         <span className="ml-2 font-medium text-foreground">
-                                                            ${liveBill.toFixed(2)}
+                                                            {formatMoney(liveBill)}
                                                         </span>
                                                     )}
                                                 </span>
@@ -306,7 +307,7 @@ return 'bg-emerald-500';
                                                 <td className="px-4 py-3 text-muted-foreground">{s.started_at ?? '—'}</td>
                                                 <td className="px-4 py-3 tabular-nums">{live.duration}</td>
                                                 <td className="px-4 py-3 text-right tabular-nums font-medium">
-                                                    ${live.bill.toFixed(2)}
+                                                    {formatMoney(live.bill)}
                                                 </td>
                                             </tr>
                                         );
