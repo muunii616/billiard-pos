@@ -141,3 +141,37 @@
         @apply bg-background text-foreground;
     }
 }
+
+@media print {
+    /* Print ONLY the invoice content; hide the rest of the app. */
+    body * {
+        visibility: hidden !important;
+    }
+
+    .invoice-print,
+    .invoice-print * {
+        visibility: visible !important;
+    }
+
+    /* Remove dialog scrolling/clipping in print. */
+    [data-slot='dialog-content'] {
+        max-height: none !important;
+        overflow: visible !important;
+    }
+
+    /* Put the invoice at the top-left of the printed page. */
+    .invoice-print {
+        position: absolute !important;
+        left: 0 !important;
+        top: 0 !important;
+        width: 100% !important;
+        page-break-inside: avoid !important;
+    }
+
+    /* Hide any interactive UI in print. */
+    .no-print,
+    [data-slot='dialog-overlay'],
+    [data-slot='dialog-close'] {
+        display: none !important;
+    }
+}

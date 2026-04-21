@@ -801,23 +801,28 @@ return 'Sets';
 
   const updateCartQuantity = (productId: number, quantity: number) => {
     setAddItemCart((prev) =>
-      prev
-        .map((i) => (i.productId === productId ? { ...i, quantity } : i))
-        .filter((i) => i.quantity > 0),
+      prev.map((i) =>
+        i.productId === productId ? { ...i, quantity: Math.max(0, Math.floor(quantity)) } : i,
+      ),
     );
   };
 
-  const cartTotal = addItemCart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const cartTotal = addItemCart.reduce((sum, item) => sum + item.price * Math.max(0, item.quantity), 0);
 
   const handleConfirmAddItemTable = () => {
     if (!addItemTableId || addItemCart.length === 0) {
 return;
 }
 
-    const items = addItemCart.map((item) => ({
-      product_id: item.productId,
-      quantity: item.quantity,
-    }));
+    const items = addItemCart
+      .filter((item) => item.quantity > 0)
+      .map((item) => ({
+        product_id: item.productId,
+        quantity: item.quantity,
+      }));
+    if (items.length === 0) {
+      return;
+    }
     router.post(`/tables/${addItemTableId}/items/bulk`, { items }, {
       onSuccess: () => {
         setAddItemModalOpen(false);
@@ -1138,7 +1143,11 @@ return;
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
               <DialogTitle>{detailsTable?.name} — Details</DialogTitle>
-              <DialogDescription>Session in progress. Timer keeps running.</DialogDescription>
+              <DialogDescription>
+                {detailsTable?.current_session?.status === 'paused'
+                  ? 'Session is paused. Timer is stopped.'
+                  : 'Session in progress. Timer keeps running.'}
+              </DialogDescription>
             </DialogHeader>
             {detailsTable?.current_session && (
               <div className="space-y-4">
@@ -1147,15 +1156,15 @@ return;
                     {getDisplayTime(detailsTable)}
                   </span>
                 </div>
-                <div>
+                <div className="rounded-lg bg-slate-800/30 p-3">
                   <h4 className="mb-2 text-sm font-medium text-muted-foreground">Items</h4>
                   {detailsTable.current_session.items.length === 0 ? (
                     <p className="text-sm text-muted-foreground">No items yet.</p>
                   ) : (
                     <ul className="space-y-1.5 text-sm">
                       {detailsTable.current_session.items.map((item) => (
-                        <li key={item.id} className="flex justify-between">
-                          <span>{item.product_name} × {item.quantity}</span>
+                        <li key={item.id} className="flex justify-between gap-3">
+                          <span className="truncate">{item.product_name} × {item.quantity}</span>
                           <span className="tabular-nums">{money(item.total_price || 0)}</span>
                         </li>
                       ))}
@@ -1411,7 +1420,7 @@ closeEditSessionItems();
                     <Button
                       type="button"
                       onClick={handleConfirmAddItemTable}
-                      disabled={addItemCart.length === 0}
+                      disabled={addItemCart.every((i) => i.quantity <= 0)}
                     >
                       Add items
                     </Button>

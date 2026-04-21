@@ -82,7 +82,7 @@ class ReceiptController extends Controller
         }
         }
 
-        Mail::to($receipt->customer_email)->send(new ReceiptMail(
+        Mail::to($receipt->customer_email)->queue(new ReceiptMail(
             $receipt->receipt_number,
             $receipt->paid_at?->format('d-m-Y') ?? now()->format('d-m-Y'),
             $receipt->paid_at?->format('h:i:s A') ?? now()->format('h:i:s A'),
@@ -92,6 +92,6 @@ class ReceiptController extends Controller
             (float) $receipt->grand_total
         ));
 
-        return response()->json(['message' => 'Receipt sent to ' . $receipt->customer_email]);
+        return response()->json(['message' => 'Receipt queued for delivery to ' . $receipt->customer_email]);
     }
 }

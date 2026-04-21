@@ -519,23 +519,28 @@ return 'Sets';
 
   const updateCartQuantity = (productId: number, quantity: number) => {
     setAddItemCart((prev) =>
-      prev
-        .map((i) => (i.productId === productId ? { ...i, quantity } : i))
-        .filter((i) => i.quantity > 0),
+      prev.map((i) =>
+        i.productId === productId ? { ...i, quantity: Math.max(0, Math.floor(quantity)) } : i,
+      ),
     );
   };
 
-  const cartTotal = addItemCart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const cartTotal = addItemCart.reduce((sum, item) => sum + item.price * Math.max(0, item.quantity), 0);
 
   const handleConfirmAddItem = () => {
     if (!addItemCheckoutId || addItemCart.length === 0) {
 return;
 }
 
-    const items = addItemCart.map((item) => ({
+    const items = addItemCart
+      .filter((item) => item.quantity > 0)
+      .map((item) => ({
       product_id: item.productId,
       quantity: item.quantity,
-    }));
+      }));
+    if (items.length === 0) {
+      return;
+    }
     router.post(`/checkouts/${addItemCheckoutId}/items/bulk`, { items }, {
       onSuccess: () => {
         setAddItemModalOpen(false);
@@ -915,7 +920,11 @@ setReopenTabId(null);
                     <Button variant="outline" type="button" onClick={() => setAddItemModalOpen(false)}>
                       Cancel
                     </Button>
-                    <Button type="button" onClick={handleConfirmAddItem} disabled={addItemCart.length === 0}>
+                    <Button
+                      type="button"
+                      onClick={handleConfirmAddItem}
+                      disabled={addItemCart.every((i) => i.quantity <= 0)}
+                    >
                       Add items
                     </Button>
                   </div>
@@ -1138,12 +1147,12 @@ return null;
 
         <Dialog open={!!invoiceReceipt} onOpenChange={(open) => !open && setInvoiceReceipt(null)}>
           <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
+            <DialogHeader className="print:hidden">
               <DialogTitle>Invoice</DialogTitle>
             </DialogHeader>
             {invoiceReceipt && (
               <>
-                <div className="rounded-xl border border-sidebar-border/70 bg-background p-4 text-sm space-y-3">
+                <div className="invoice-print rounded-xl border border-sidebar-border/70 bg-background p-4 text-sm space-y-3">
                   <div className="text-center">
                     <h2 className="text-lg font-semibold">Billiard POS</h2>
                     <p className="text-muted-foreground text-xs">GAME INVOICE</p>
@@ -1180,8 +1189,8 @@ return null;
                     <span>{money(Number(invoiceReceipt.grand_total) || 0)}</span>
                   </div>
                 </div>
-                {emailMessage && <p className="text-sm text-muted-foreground">{emailMessage}</p>}
-                <DialogFooter className="flex-row gap-2 sm:gap-0">
+                {emailMessage && <p className="no-print text-sm text-muted-foreground">{emailMessage}</p>}
+                <DialogFooter className="no-print flex-row gap-2 sm:gap-2">
                   <Button variant="outline" onClick={() => window.print()}>
                     Print
                   </Button>
