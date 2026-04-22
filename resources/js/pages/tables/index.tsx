@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import InvoiceDialog, { type InvoiceReceipt } from '@/components/invoice-dialog';
 import {
   Select,
   SelectContent,
@@ -68,36 +69,6 @@ type Table = {
   name: string;
   status: string;
   current_session: TableSession | null;
-};
-
-type InvoiceLineItem = {
-  type: string;
-  description: string;
-  from?: string;
-  to?: string;
-  duration?: string;
-  rate?: number;
-  quantity?: number;
-  unit_price?: number;
-  subtotal: number;
-};
-
-type InvoiceReceipt = {
-  id: number;
-  receipt_number: string;
-  date: string;
-  time: string;
-  table_name: string;
-  customer_email: string | null;
-  time_total: number;
-  products_total: number;
-  grand_total: number;
-  started_at?: string;
-  ended_at?: string;
-  duration_formatted?: string;
-  rate_per_minute?: number;
-  line_items: InvoiceLineItem[];
-  payments: { method: string; amount: number }[];
 };
 
 type Props = {
@@ -563,10 +534,6 @@ payload.customer_email = customerEmail.trim();
       onError: () => setSubmitting(false),
       onFinish: () => setSubmitting(false),
     });
-  };
-
-  const handlePrintInvoice = () => {
-    // Mockup: no-op or could call window.print() on the invoice content
   };
 
   const openCancelSessionDialog = (tableId: number) => {
@@ -1663,68 +1630,19 @@ return null;
           </DialogContent>
         </Dialog>
 
-        <Dialog open={!!invoiceReceipt} onOpenChange={(open) => !open && setInvoiceReceipt(null)}>
-          <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Invoice Details</DialogTitle>
-            </DialogHeader>
-            {invoiceReceipt && (
-              <>
-                <div className="rounded-xl border border-sidebar-border/70 bg-background p-4 text-sm space-y-3">
-                  <div className="text-center">
-                    <h2 className="text-lg font-semibold">Billiard POS</h2>
-                    <p className="text-muted-foreground text-xs">GAME INVOICE</p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-1 text-muted-foreground">
-                    <span>Invoice:</span>
-                    <span className="font-medium text-foreground">{invoiceReceipt.receipt_number}</span>
-                    <span>Date:</span>
-                    <span className="text-foreground">{invoiceReceipt.date}</span>
-                    <span>Time:</span>
-                    <span className="text-foreground">{invoiceReceipt.time}</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-1 text-muted-foreground">
-                    <span>Customer:</span>
-                    <span className="text-foreground">{invoiceReceipt.customer_email || '—'}</span>
-                    <span>Table:</span>
-                    <span className="text-foreground">{invoiceReceipt.table_name}</span>
-                  </div>
-                  <div className="border-t pt-2 mt-2">
-                    <div className="text-xs font-medium text-muted-foreground mb-1">Qty · Description · Subtotal</div>
-                    {invoiceReceipt.line_items.map((item, i) => (
-                      <div key={i} className="flex justify-between text-sm py-0.5">
-                        <span>
-                          {item.type === 'time' ? `${item.duration} @ ${item.rate}/min` : `${item.quantity} × ${item.description}`}
-                        </span>
-                        <span>{money(Number(item.subtotal) || 0)}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="flex justify-between font-semibold pt-2 border-t">
-                    <span>Grand total</span>
-                    <span>{money(Number(invoiceReceipt.grand_total) || 0)}</span>
-                  </div>
-                </div>
-                {emailMessage && (
-                  <p className="text-sm text-muted-foreground">{emailMessage}</p>
-                )}
-                <DialogFooter className="flex-row gap-2 sm:gap-0">
-                  <Button variant="outline" onClick={handlePrintInvoice}>
-                    Print
-                  </Button>
-                  <Button onClick={handleEmailInvoice} disabled={emailSending}>
-                    {emailSending ? 'Sending…' : 'Email'}
-                  </Button>
-                  <Button variant="secondary" onClick={() => {
- setInvoiceReceipt(null); setEmailMessage(null); 
-}}>
-                    Close
-                  </Button>
-                </DialogFooter>
-              </>
-            )}
-          </DialogContent>
-        </Dialog>
+        <InvoiceDialog
+          receipt={invoiceReceipt}
+          open={!!invoiceReceipt}
+          onOpenChange={(open) => !open && setInvoiceReceipt(null)}
+          money={money}
+          emailMessage={emailMessage}
+          emailSending={emailSending}
+          onEmail={handleEmailInvoice}
+          onClose={() => {
+            setInvoiceReceipt(null);
+            setEmailMessage(null);
+          }}
+        />
 
         <AlertDialog
           open={cancelSessionOpen}

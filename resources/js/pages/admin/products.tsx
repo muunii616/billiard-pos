@@ -3,6 +3,7 @@ import { CheckCircle2Icon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import InvoiceDialog, { type InvoiceReceipt } from '@/components/invoice-dialog';
 import {
   Dialog,
   DialogContent,
@@ -48,28 +49,6 @@ type CartItem = {
   name: string;
   price: number;
   quantity: number;
-};
-
-type InvoiceReceipt = {
-  id: number;
-  receipt_number: string;
-  date: string;
-  time: string;
-  table_name: string;
-  customer_email?: string | null;
-  time_total: number;
-  products_total: number;
-  grand_total: number;
-  line_items: Array<{
-    type: 'time' | 'product';
-    description: string;
-    quantity?: number;
-    unit_price?: number;
-    rate?: number;
-    duration?: string;
-    subtotal: number;
-  }>;
-  payments?: Array<{ method: string; amount: number }>;
 };
 
 const breadcrumbs: BreadcrumbItem[] = [
@@ -795,72 +774,19 @@ return 'Sets';
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!invoiceReceipt} onOpenChange={(open) => !open && setInvoiceReceipt(null)}>
-        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Invoice</DialogTitle>
-          </DialogHeader>
-          {invoiceReceipt && (
-            <>
-              <div className="invoice-print rounded-xl border border-sidebar-border/70 bg-background p-4 text-sm space-y-3">
-                <div className="text-center">
-                  <h2 className="text-lg font-semibold">Billiard POS</h2>
-                  <p className="text-muted-foreground text-xs">GAME INVOICE</p>
-                </div>
-                <div className="grid grid-cols-2 gap-1 text-muted-foreground">
-                  <span>Invoice:</span>
-                  <span className="font-medium text-foreground">{invoiceReceipt.receipt_number}</span>
-                  <span>Date:</span>
-                  <span className="text-foreground">{invoiceReceipt.date}</span>
-                  <span>Time:</span>
-                  <span className="text-foreground">{invoiceReceipt.time}</span>
-                </div>
-                <div className="grid grid-cols-2 gap-1 text-muted-foreground">
-                  <span>Customer:</span>
-                  <span className="text-foreground">{invoiceReceipt.customer_email || '—'}</span>
-                  <span>Table:</span>
-                  <span className="text-foreground">{invoiceReceipt.table_name || 'Open tab'}</span>
-                </div>
-                <div className="border-t pt-2 mt-2">
-                  <div className="text-xs font-medium text-muted-foreground mb-1">Line items</div>
-                  {(invoiceReceipt.line_items || []).map((item, i) => (
-                    <div key={i} className="flex justify-between text-sm py-0.5">
-                      <span>
-                        {item.type === 'time'
-                          ? `${item.duration} @ ${item.rate}/min`
-                          : `${item.quantity} × ${item.description}`}
-                      </span>
-                      <span>{money(Number(item.subtotal) || 0)}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex justify-between font-semibold pt-2 border-t">
-                  <span>Grand total</span>
-                  <span>{money(Number(invoiceReceipt.grand_total) || 0)}</span>
-                </div>
-              </div>
-              {emailMessage && <p className="no-print text-sm text-muted-foreground">{emailMessage}</p>}
-              <DialogFooter className="no-print flex-row gap-2 sm:gap-2">
-                <Button variant="outline" onClick={() => window.print()}>
-                  Print
-                </Button>
-                <Button onClick={handleEmailInvoice} disabled={emailSending}>
-                  {emailSending ? 'Sending…' : 'Email'}
-                </Button>
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    setInvoiceReceipt(null);
-                    setEmailMessage(null);
-                  }}
-                >
-                  Close
-                </Button>
-              </DialogFooter>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+      <InvoiceDialog
+        receipt={invoiceReceipt}
+        open={!!invoiceReceipt}
+        onOpenChange={(open) => !open && setInvoiceReceipt(null)}
+        money={money}
+        emailMessage={emailMessage}
+        emailSending={emailSending}
+        onEmail={handleEmailInvoice}
+        onClose={() => {
+          setInvoiceReceipt(null);
+          setEmailMessage(null);
+        }}
+      />
 
       {isAdmin && (
         <Dialog
