@@ -46,7 +46,6 @@ class CheckoutAdminController extends Controller
                     continue;
                 }
 
-                // New line item: prefer product_id lookup when available
                 if (! empty($row['product_id'])) {
                     $product = Product::findOrFail((int) $row['product_id']);
                     PosItemUpserter::upsertCheckoutProduct($checkout, $product, $qty, increment: false);
@@ -105,7 +104,6 @@ class CheckoutAdminController extends Controller
                     'total_price' => $item->total_price,
                 ]);
             }
-            // Note: we intentionally do NOT move historical game sessions to avoid rewriting history.
         });
 
         return response()->json(['message' => 'Tab reopened.', 'checkout_id' => $new->id]);

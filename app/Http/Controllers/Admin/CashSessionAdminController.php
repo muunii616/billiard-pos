@@ -167,7 +167,6 @@ class CashSessionAdminController extends Controller
             abort(404);
         }
 
-        // Prefer SVG (works without GD). Use PNG only when GD is available.
         $logoPath = public_path('logo.svg');
         $logoDataUri = null;
         if (is_file($logoPath)) {

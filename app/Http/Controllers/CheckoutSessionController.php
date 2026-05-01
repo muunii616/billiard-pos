@@ -39,7 +39,6 @@ class CheckoutSessionController extends Controller
         $isAdmin = $request->user()?->role === 'admin';
         $includeAll = $isAdmin && $request->boolean('all');
 
-        // Merged source tabs are not shown as separate rows — their sessions/items moved to the target tab.
         $checkoutsQuery = CheckoutSession::with(['gameSessions.table', 'items'])
             ->when(! $includeAll, fn ($q) => $q->open())
             ->when($includeAll, fn ($q) => $q->where('status', '!=', 'merged'))
@@ -326,12 +325,10 @@ class CheckoutSessionController extends Controller
 
         DB::transaction(function () use ($target, $sources) {
             foreach ($sources as $source) {
-                // Move game sessions
                 foreach ($source->gameSessions as $session) {
                     $session->update(['checkout_session_id' => $target->id]);
                 }
 
-                // Move items, merging by product
                 foreach ($source->items as $item) {
                     $existing = CheckoutSessionItem::query()
                         ->where('checkout_session_id', $target->id)

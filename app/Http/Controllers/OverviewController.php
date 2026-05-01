@@ -84,7 +84,6 @@ class OverviewController extends Controller
         ];
 
         foreach ($receipts as $receipt) {
-            // Session-only receipt items
             if ($receipt->session) {
                 foreach ($receipt->session->items as $item) {
                     $category = $this->normalizeCategory($item->product_category ?? $item->product?->category);
@@ -92,7 +91,6 @@ class OverviewController extends Controller
                 }
             }
 
-            // Checkout receipt includes tab items and game session items
             if ($receipt->checkoutSession) {
                 foreach ($receipt->checkoutSession->items as $item) {
                     $category = $this->normalizeCategory($item->product_category ?? $item->product?->category);

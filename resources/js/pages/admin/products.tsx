@@ -1,9 +1,10 @@
 import { Head, router, useForm } from '@inertiajs/react';
 import { CheckCircle2Icon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import InvoiceDialog from '@/components/invoice-dialog';
+import type {InvoiceReceipt} from '@/components/invoice-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import InvoiceDialog, { type InvoiceReceipt } from '@/components/invoice-dialog';
 import {
   Dialog,
   DialogContent,

@@ -186,7 +186,6 @@ headers['X-XSRF-TOKEN'] = decodeURIComponent(csrfToken);
         throw new Error(data.message || 'Failed to save receipt.');
       }
 
-      // Refresh the page data so invoices + charts reflect voiding changes.
       router.reload();
     } catch (e) {
       setReceiptError(e instanceof Error ? e.message : 'Failed to save receipt.');

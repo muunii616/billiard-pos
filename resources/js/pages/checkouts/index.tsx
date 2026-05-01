@@ -1,6 +1,8 @@
 import { Head, router, usePage } from '@inertiajs/react';
 import { Pencil, Wallet } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import InvoiceDialog from '@/components/invoice-dialog';
+import type {InvoiceReceipt} from '@/components/invoice-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
   AlertDialog,
@@ -23,7 +25,6 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import InvoiceDialog, { type InvoiceReceipt } from '@/components/invoice-dialog';
 import AppLayout from '@/layouts/app-layout';
 import {
   buildExactSettlementPayments,
@@ -513,9 +514,11 @@ return;
       product_id: item.productId,
       quantity: item.quantity,
       }));
+
     if (items.length === 0) {
       return;
     }
+
     router.post(`/checkouts/${addItemCheckoutId}/items/bulk`, { items }, {
       onSuccess: () => {
         setAddItemModalOpen(false);
@@ -761,7 +764,6 @@ setReopenTabId(null);
           </div>
         )}
 
-        {/* Add item modal for a checkout tab */}
         <Dialog open={addItemModalOpen} onOpenChange={(open) => !open && setAddItemModalOpen(false)}>
           <DialogContent className="w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-5xl">
             <DialogHeader>
@@ -771,9 +773,7 @@ setReopenTabId(null);
               </DialogDescription>
             </DialogHeader>
 
-            {/* Shell */}
             <div className="mt-2 rounded-xl border border-sidebar-border/70 bg-background/95 p-3 shadow-sm dark:border-sidebar-border sm:p-4">
-              {/* Global search */}
               <div className="mb-4">
                 <Input
                   placeholder="Search products..."
@@ -783,9 +783,7 @@ setReopenTabId(null);
                 />
               </div>
 
-              {/* 3-column content */}
               <div className="flex flex-col gap-3 overflow-y-auto lg:h-[420px] lg:flex-row lg:gap-4 lg:overflow-hidden">
-                {/* Categories (left) */}
                 <div className="flex w-full flex-shrink-0 flex-col lg:w-52">
                   <Label className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     Categories
@@ -815,7 +813,6 @@ setReopenTabId(null);
                   </div>
                 </div>
 
-                {/* Product grid (center) */}
                 <div className="flex min-w-0 flex-1 flex-col">
                   <Label className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     Items
@@ -851,7 +848,6 @@ setReopenTabId(null);
                   </div>
                 </div>
 
-                {/* Cart (right) */}
                 <div className="flex w-full flex-shrink-0 flex-col lg:w-64">
                   <Label className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     Cart

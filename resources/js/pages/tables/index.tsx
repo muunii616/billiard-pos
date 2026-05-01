@@ -1,6 +1,8 @@
 import { Head, router, usePage, useRemember } from '@inertiajs/react';
 import { Play, Pause, ShoppingCart, ListChecks, Square, Pencil, Plus, CheckCircle2Icon } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
+import InvoiceDialog from '@/components/invoice-dialog';
+import type {InvoiceReceipt} from '@/components/invoice-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
   AlertDialog,
@@ -24,7 +26,6 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import InvoiceDialog, { type InvoiceReceipt } from '@/components/invoice-dialog';
 import {
   Select,
   SelectContent,
@@ -210,7 +211,6 @@ return;
 
   const pageErrors = (usePage().props as { errors?: Record<string, string> }).errors ?? {};
 
-  // Show invoice modal when we have receipt from redirect
   useEffect(() => {
     if (receiptProp) {
 setInvoiceReceipt(receiptProp);
@@ -247,14 +247,12 @@ setInvoiceReceipt(receiptProp);
     return () => window.clearInterval(intervalId);
   }, []);
 
-  // Live timer: tick every second
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
 
     return () => clearInterval(id);
   }, []);
 
-  // Touch/click mode for mobile/tablet: no hover, reveal actions on tap.
   useEffect(() => {
     const media = window.matchMedia('(hover: none), (pointer: coarse)');
     const sync = () => {
@@ -303,7 +301,6 @@ return null;
     return sec !== null ? formatElapsedSeconds(sec) : (table.current_session?.elapsed ?? '00:00:00');
   }, [checkoutTableId, frozenElapsedSeconds, getElapsedSeconds]);
 
-  // Show server error in modal when checkout is open
   useEffect(() => {
     if (checkoutOpen && pageErrors.payments) {
       setCheckoutError(pageErrors.payments);
@@ -421,7 +418,6 @@ return;
         setEndChoiceTableId(null);
         setEndChoiceSummary(null);
         setEndChoiceWasPaused(false);
-        // Stay on Tables; server redirects back here.
       },
     });
   };
@@ -663,8 +659,6 @@ return;
     );
   };
 
-  // Maintenance is controlled from the Edit Table modal (admin).
-
   const handleEmailInvoice = async () => {
     if (!invoiceReceipt) {
 return;
@@ -787,9 +781,11 @@ return;
         product_id: item.productId,
         quantity: item.quantity,
       }));
+
     if (items.length === 0) {
       return;
     }
+
     router.post(`/tables/${addItemTableId}/items/bulk`, { items }, {
       onSuccess: () => {
         setAddItemModalOpen(false);
@@ -881,7 +877,6 @@ return;
             const isMaintenance = table.status === 'maintenance';
             const showTimer = hasSession;
 
-            // Glow by status — visible but not harsh
             const glowClass = isMaintenance
               ? 'shadow-[0_0_28px_rgba(244,63,94,0.5)] ring-[3px] ring-rose-500/60'
               : isPaused
@@ -892,7 +887,6 @@ return;
 
             return (
               <div key={table.id} className="group flex flex-col items-center">
-                {/* Name pill above table */}
                 <span
                   className={`mb-2 rounded-full px-3 py-1 text-sm font-semibold ${
                     hasSession ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300' : 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-200'
@@ -901,7 +895,6 @@ return;
                   {table.name}
                 </span>
 
-                {/* Billiard table: portrait (faces upward), buttons on the table like sample */}
                 <div
                   className={`relative w-full max-w-[180px] rounded-xl transition-shadow duration-300 ${glowClass}`}
                   onClick={() => {
@@ -913,7 +906,6 @@ return;
                   }}
                 >
                   <div className="relative rounded-lg border-[5px] border-amber-800/90 bg-amber-900/80 p-1.5 shadow-inner">
-                    {/* 6 pockets: 4 corners + 2 side (portrait) */}
                     <div className="absolute left-0 top-0 h-3 w-3 rounded-full bg-black" />
                     <div className="absolute right-0 top-0 h-3 w-3 rounded-full bg-black" />
                     <div className="absolute left-0 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-black" />
@@ -921,9 +913,7 @@ return;
                     <div className="absolute bottom-0 left-0 h-3 w-3 rounded-full bg-black" />
                     <div className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-black" />
 
-                    {/* Felt: portrait — taller than wide, compact proportion */}
                     <div className="relative flex aspect-[1/1.85] min-h-[180px] w-full flex-col rounded-md bg-slate-700">
-                      {/* Timer (top) */}
                       <div className="flex flex-1 items-center justify-center px-2 pt-3">
                         {showTimer && (
                           <span className="font-mono text-xl font-semibold tabular-nums text-emerald-400">
@@ -934,7 +924,6 @@ return;
                         <span className="text-sm text-slate-500">—</span>
                       )}
                       </div>
-                      {/* Buttons on the table (bottom), visible on hover */}
                       <div
                         className={`flex flex-wrap items-center justify-center gap-1.5 px-2 pb-3 transition-opacity duration-200 ${
                           isTouchDevice
@@ -944,7 +933,6 @@ return;
                             : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
                         }`}
                         onClick={(e) => {
-                          // Prevent mobile tap on action buttons from toggling card visibility.
                           e.stopPropagation();
                         }}
                       >
@@ -1105,7 +1093,6 @@ return;
           </DialogContent>
         </Dialog>
 
-        {/* Details modal: timer (live) + session items */}
         <Dialog open={!!detailsTable} onOpenChange={(open) => !open && setDetailsTable(null)}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
@@ -1246,7 +1233,6 @@ closeEditSessionItems();
           </DialogContent>
         </Dialog>
 
-        {/* Add item modal for a table session */}
         <Dialog open={addItemModalOpen} onOpenChange={(open) => !open && setAddItemModalOpen(false)}>
           <DialogContent className="w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-5xl">
             <DialogHeader>
@@ -1256,9 +1242,7 @@ closeEditSessionItems();
               </DialogDescription>
             </DialogHeader>
 
-            {/* Shell */}
             <div className="mt-2 rounded-xl border border-sidebar-border/70 bg-background/95 p-3 shadow-sm dark:border-sidebar-border sm:p-4">
-              {/* Global search (top, full width) */}
               <div className="mb-4">
                 <Input
                   placeholder="Search products..."
@@ -1268,9 +1252,7 @@ closeEditSessionItems();
                 />
               </div>
 
-              {/* 3-column content */}
               <div className="flex flex-col gap-3 overflow-y-auto lg:h-[420px] lg:flex-row lg:gap-4 lg:overflow-hidden">
-                {/* Categories (left) */}
                 <div className="flex w-full flex-shrink-0 flex-col lg:w-52">
                   <Label className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     Categories
@@ -1300,7 +1282,6 @@ closeEditSessionItems();
                   </div>
                 </div>
 
-                {/* Product grid (center) */}
                 <div className="flex min-w-0 flex-1 flex-col">
                   <Label className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     Items
@@ -1336,7 +1317,6 @@ closeEditSessionItems();
                   </div>
                 </div>
 
-                {/* Cart (right) */}
                 <div className="flex w-full flex-shrink-0 flex-col lg:w-64">
                   <Label className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     Cart
@@ -1398,7 +1378,6 @@ closeEditSessionItems();
           </DialogContent>
         </Dialog>
 
-        {/* Edit table modal (admin) */}
         <Dialog open={!!editTable} onOpenChange={(open) => !open && setEditTable(null)}>
           <DialogContent className="sm:max-w-sm">
             <DialogHeader>
@@ -1463,7 +1442,6 @@ closeEditSessionItems();
           </DialogContent>
         </Dialog>
 
-        {/* Add table modal (admin) */}
         <Dialog open={addTableOpen} onOpenChange={(open) => !open && setAddTableOpen(false)}>
           <DialogContent className="sm:max-w-sm">
             <DialogHeader>

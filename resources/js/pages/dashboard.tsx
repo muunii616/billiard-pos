@@ -80,7 +80,6 @@ return `${Math.floor(m / 60)}h ${m % 60}m`;
 export default function Dashboard({ today, rate_per_minute, tables, running_sessions }: Props) {
     const [now, setNow] = useState(() => Date.now());
 
-    // Always fetch fresh dashboard data when visiting (avoids stale prefetched/cached data after starting a session on Tables)
     useEffect(() => {
         router.reload({ only: ['today', 'tables', 'running_sessions', 'rate_per_minute'] });
     }, []);

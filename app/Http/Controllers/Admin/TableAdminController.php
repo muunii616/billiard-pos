@@ -20,7 +20,6 @@ class TableAdminController extends Controller
         }
 
         DB::transaction(function () use ($session, $table) {
-            // Mark session cancelled and zero-out charges. Keep item rows for audit, but treat as voided by totals=0.
             $session->update([
                 'status' => 'cancelled',
                 'ended_at' => now(),
@@ -29,7 +28,6 @@ class TableAdminController extends Controller
                 'time_total' => 0,
             ]);
 
-            // Optionally also zero item totals for clarity.
             foreach ($session->items as $item) {
                 $item->update([
                     'total_price' => 0,
@@ -48,7 +46,6 @@ class TableAdminController extends Controller
             'status' => ['required', 'string', 'in:available,maintenance'],
         ]);
 
-        // Only allow maintenance toggle when not running/paused (so we don't break active sessions).
         if (in_array($table->status, BilliardTable::activeSessionStatuses(), true)) {
             return response()->json(['message' => 'Cannot change maintenance status during an active session.'], 422);
         }

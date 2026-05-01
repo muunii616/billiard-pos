@@ -47,7 +47,6 @@ class BilliardTableController extends Controller
 
     public function destroy(BilliardTable $table)
     {
-        // Only allow deleting tables that are not currently running/paused.
         if ($table->status === 'running' || $table->status === 'paused') {
             return redirect()->back()->withErrors(['table' => 'Cannot delete a table with an active session.']);
         }
