@@ -693,6 +693,7 @@ export default function AdminProducts({
                                             >
                                                 <button
                                                     type="button"
+                                                    data-testid="product-tile"
                                                     onClick={() =>
                                                         addToCart(product)
                                                     }
