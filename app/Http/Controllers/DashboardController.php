@@ -71,16 +71,18 @@ class DashboardController extends Controller
             $itemsTotal = 0;
 
             if ($inPlay) {
-                $elapsedSeconds = $this->sessionPlayedSeconds($session, $now);
-                $elapsedFormatted = gmdate('H:i:s', $elapsedSeconds);
-                $timeTotal = round(($elapsedSeconds / 60) * (float) config('pos.rate_per_minute', 0.20), 2);
+                $playedSeconds = $this->sessionPlayedSeconds($session, $now);
+                $elapsedFormatted = gmdate('H:i:s', $playedSeconds);
+                $timeTotal = round(($playedSeconds / 60) * (float) config('pos.rate_per_minute', 0.20), 2);
                 $itemsTotal = (float) $session->items->sum('total_price');
                 $currentBill = round(max(0, $timeTotal + $itemsTotal), 2);
                 $startedAt = $session->started_at?->copy()->setTimezone($appTz)->format('g:i A');
-                $minutes = (int) floor($elapsedSeconds / 60);
+                $minutes = (int) floor($playedSeconds / 60);
                 $durationFormatted = $minutes >= 60
                     ? (int) floor($minutes / 60) . 'h ' . ($minutes % 60) . 'm'
                     : $minutes . 'm';
+                // The client derives the live segment from last_resume_at.
+                $elapsedSeconds = (int) ($session->total_played_seconds ?? 0);
                 if ($session->status === 'running' && $session->last_resume_at) {
                     $lastResumeAt = $session->last_resume_at->toIso8601String();
                 }

@@ -49,8 +49,11 @@ class TableController extends Controller
                 $sessionItems = [];
 
                 if ($currentSession?->isActive()) {
-                    $elapsedSeconds = $this->sessionPlayedSeconds($currentSession);
-                    $elapsed = gmdate('H:i:s', $elapsedSeconds);
+                    $playedSeconds = $this->sessionPlayedSeconds($currentSession);
+                    $elapsed = gmdate('H:i:s', $playedSeconds);
+                    // The browser adds the current running segment from last_resume_at.
+                    // Send only accumulated completed segments to avoid counting it twice.
+                    $elapsedSeconds = (int) ($currentSession->total_played_seconds ?? 0);
                     if ($currentSession->status === 'running' && $currentSession->last_resume_at) {
                         $lastResumeAt = $currentSession->last_resume_at->toIso8601String();
                     }
