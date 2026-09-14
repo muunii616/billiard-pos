@@ -5,7 +5,9 @@ use App\Models\CheckoutSession;
 use App\Models\CheckoutSessionItem;
 use App\Models\GameSession;
 use App\Models\Product;
+use App\Models\Receipt;
 use App\Models\User;
+use Inertia\Testing\AssertableInertia as Assert;
 
 test('table session can start pause and resume', function () {
     $user = User::factory()->create();
@@ -49,7 +51,7 @@ test('products can be added into a new open tab', function () {
     $product = Product::create([
         'name' => 'Cola',
         'category' => 'Drinks',
-        'price' => 2.50,
+        'price' => 2500,
         'is_active' => true,
     ]);
 
@@ -84,7 +86,7 @@ test('open tabs can be merged into a target tab', function () {
     $product = Product::create([
         'name' => 'Chips',
         'category' => 'Snacks',
-        'price' => 3.00,
+        'price' => 3000,
         'is_active' => true,
     ]);
 
@@ -97,8 +99,8 @@ test('open tabs can be merged into a target tab', function () {
         'product_name' => $product->name,
         'product_category' => $product->category,
         'quantity' => 1,
-        'unit_price' => 3.00,
-        'total_price' => 3.00,
+        'unit_price' => 3000,
+        'total_price' => 3000,
     ]);
 
     CheckoutSessionItem::create([
@@ -107,8 +109,8 @@ test('open tabs can be merged into a target tab', function () {
         'product_name' => $product->name,
         'product_category' => $product->category,
         'quantity' => 2,
-        'unit_price' => 3.00,
-        'total_price' => 6.00,
+        'unit_price' => 3000,
+        'total_price' => 6000,
     ]);
 
     $gameSession = GameSession::create([
@@ -141,4 +143,176 @@ test('open tabs can be merged into a target tab', function () {
 
     expect($mergedItem)->not->toBeNull();
     expect($mergedItem->quantity)->toBe(3);
+});
+
+test('table time rounds to the nearest five-minute billing interval', function () {
+    $user = User::factory()->create();
+    $table = BilliardTable::create([
+        'name' => 'Table 3',
+        'status' => 'paused',
+    ]);
+
+    $session = GameSession::create([
+        'billiard_table_id' => $table->id,
+        'user_id' => $user->id,
+        'status' => 'paused',
+        'started_at' => now()->subMinutes(17),
+        'paused_at' => now(),
+        'total_played_seconds' => 17 * 60,
+        'time_total' => 0,
+    ]);
+
+    $this->actingAs($user)
+        ->post(route('tables.end', $table), [
+            'payments' => [
+                ['method' => 'cash', 'amount' => 5000],
+            ],
+        ])
+        ->assertRedirect();
+
+    $session->refresh();
+    expect((float) $session->time_total)->toBe(5000.0);
+
+    $receipt = Receipt::query()->where('game_session_id', $session->id)->first();
+    expect($receipt)->not->toBeNull();
+    expect((float) $receipt->time_total)->toBe(5000.0)
+        ->and((float) $receipt->grand_total)->toBe(5000.0);
+});
+
+test('employee must provide a reason when cancelling an active table session', function () {
+    $employee = User::factory()->create(['role' => 'employee']);
+    $table = BilliardTable::create([
+        'name' => 'Table 4',
+        'status' => 'running',
+    ]);
+
+    $session = GameSession::create([
+        'billiard_table_id' => $table->id,
+        'user_id' => $employee->id,
+        'status' => 'running',
+        'started_at' => now()->subMinutes(10),
+        'last_resume_at' => now()->subMinutes(10),
+        'total_played_seconds' => 0,
+        'time_total' => 0,
+    ]);
+
+    $this->actingAs($employee)
+        ->postJson(route('tables.cancel-session', $table), [
+            'reason' => '',
+        ])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('reason');
+
+    $session->refresh();
+    $table->refresh();
+
+    expect($session->status)->toBe('running')
+        ->and($table->status)->toBe('running');
+});
+
+test('employee cancellation stores the reason and appears in overview', function () {
+    $employee = User::factory()->create([
+        'name' => 'Employee User',
+        'role' => 'employee',
+    ]);
+    $table = BilliardTable::create([
+        'name' => 'Table 5',
+        'status' => 'running',
+    ]);
+
+    $session = GameSession::create([
+        'billiard_table_id' => $table->id,
+        'user_id' => $employee->id,
+        'status' => 'running',
+        'started_at' => now()->subMinutes(10),
+        'last_resume_at' => now()->subMinutes(10),
+        'total_played_seconds' => 0,
+        'time_total' => 0,
+    ]);
+
+    $this->actingAs($employee)
+        ->postJson(route('tables.cancel-session', $table), [
+            'reason' => 'Customer left before paying.',
+        ])
+        ->assertOk()
+        ->assertJsonPath('message', 'Session cancelled.');
+
+    $session->refresh();
+    $table->refresh();
+
+    expect($session->status)->toBe('cancelled')
+        ->and($session->cancel_reason)->toBe('Customer left before paying.')
+        ->and($session->cancelled_by_user_id)->toBe($employee->id)
+        ->and($table->status)->toBe('available');
+
+    $this->actingAs($employee)
+        ->get(route('overview', ['mode' => 'daily', 'date' => now()->toDateString()]))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->has('cancelled_sessions', 1)
+            ->where('cancelled_sessions.0.table_name', 'Table 5')
+            ->where('cancelled_sessions.0.cancelled_by', 'Employee User')
+            ->where('cancelled_sessions.0.reason', 'Customer left before paying.')
+        );
+});
+
+test('admin can cancel an active table session without a reason', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $table = BilliardTable::create([
+        'name' => 'Table 6',
+        'status' => 'paused',
+    ]);
+
+    $session = GameSession::create([
+        'billiard_table_id' => $table->id,
+        'user_id' => $admin->id,
+        'status' => 'paused',
+        'started_at' => now()->subMinutes(10),
+        'paused_at' => now(),
+        'total_played_seconds' => 600,
+        'time_total' => 0,
+    ]);
+
+    $this->actingAs($admin)
+        ->postJson(route('tables.cancel-session', $table), [
+            'reason' => '',
+        ])
+        ->assertOk();
+
+    $session->refresh();
+
+    expect($session->status)->toBe('cancelled')
+        ->and($session->cancel_reason)->toBeNull()
+        ->and($session->cancelled_by_user_id)->toBe($admin->id);
+});
+
+test('employee must provide a reason when deleting an open tab', function () {
+    $employee = User::factory()->create(['role' => 'employee']);
+    $tab = CheckoutSession::create(['status' => CheckoutSession::STATUS_OPEN]);
+
+    $this->actingAs($employee)
+        ->postJson(route('admin.checkouts.void', $tab), [
+            'reason' => '',
+        ])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('reason');
+
+    expect($tab->fresh()->status)->toBe('open');
+});
+
+test('employee can delete an open tab with a reason', function () {
+    $employee = User::factory()->create(['role' => 'employee']);
+    $tab = CheckoutSession::create(['status' => CheckoutSession::STATUS_OPEN]);
+
+    $this->actingAs($employee)
+        ->postJson(route('admin.checkouts.void', $tab), [
+            'reason' => 'Customer cancelled the order.',
+        ])
+        ->assertOk();
+
+    $tab->refresh();
+
+    expect($tab->status)->toBe('voided')
+        ->and($tab->void_reason)->toBe('Customer cancelled the order.')
+        ->and($tab->voided_by_user_id)->toBe($employee->id);
 });

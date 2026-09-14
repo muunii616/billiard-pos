@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
+  <title>Lox Billiard POS</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; overflow: hidden; color: #eef5f2; background: #071311; }
+    body::before { content: ""; position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 50% 40%, #16473b66 0%, transparent 65%); }
+    main { position: relative; width: min(960px, 96vw); text-align: center; }
+    .eyebrow { margin: 0 0 -15px; color: #8dafa1; font-size: 11px; font-weight: 600; letter-spacing: .38em; text-transform: uppercase; }
+    canvas { display: block; width: 100%; aspect-ratio: 900 / 470; }
+    .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .loading { display: flex; justify-content: center; align-items: center; gap: 10px; margin-top: -6px; min-height: 24px; }
+    #status { margin: 0; color: #99b0a8; font-size: 13px; letter-spacing: .025em; }
+    .dot { width: 5px; height: 5px; border-radius: 50%; background: #c8b27d; box-shadow: 0 0 12px #c8b27d66; animation: pulse 1.8s ease-in-out infinite; }
+    footer { margin-top: 28px; color: #49645a; font-size: 10px; letter-spacing: .22em; text-transform: uppercase; }
+    @keyframes pulse { 50% { opacity: .25; transform: scale(.7); } }
+    @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+    @media (max-height: 650px) { main { width: min(760px, 92vw); } footer { margin-top: 12px; } }
+  </style>
+</head>
+<body>
+  <main aria-labelledby="brand">
+    <h1 id="brand" class="sr-only">Lox Billiard POS</h1>
+    <p class="eyebrow">Every great game starts here</p>
+    <canvas id="break" width="900" height="470" aria-hidden="true"></canvas>
+    <div class="loading" role="status" aria-live="polite"><span class="dot" aria-hidden="true"></span><p id="status">Getting ready for the next game…</p></div>
+    <footer>Your club. Your game.</footer>
+  </main>
+  <script>
+    (() => {
+      const canvas = document.getElementById('break');
+      const ctx = canvas.getContext('2d');
+      const motion = matchMedia('(prefers-reduced-motion: reduce)');
+      const W = 900, H = 470, R = 15;
+      const start = performance.now();
+      const clamp = n => Math.max(0, Math.min(1, n));
+      const ease = n => 1 - Math.pow(1 - clamp(n), 3);
+      const lerp = (a, b, t) => a + (b - a) * t;
+      const colors = ['#edba3b', '#326ec5', '#c44c47', '#8061ac', '#dd8540', '#368572', '#8b354a', '#111a1b'];
+      const numbers = [1, 9, 2, 3, 8, 10, 11, 4, 12, 5, 6, 13, 7, 14, 15];
+      const ends = [[687,174], [751,116], [666,86], [548,87], [311,359], [741,266], [601,275], [811,186], [447,248], [803,83], [524,202], [667,232], [746,204], [619,136], [380,93]];
+      const balls = [];
+      let index = 0;
+      for (let row = 0; row < 5; row++) {
+        for (let col = 0; col <= row; col++) {
+          balls.push({n: numbers[index], x: 536 + row * R * 1.77, y: 174 + (col - row / 2) * R * 2.04, end: ends[index], spin: (index % 2 ? 1 : -1) * (1.2 + index / 15)});
+          index++;
+        }
+      }
+      function circle(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); }
+      function ball(x, y, radius, number, rotation = 0, opacity = 1) {
+        ctx.save(); ctx.globalAlpha = opacity;
+        ctx.fillStyle = '#00000065'; ctx.beginPath(); ctx.ellipse(x + 3, y + radius * .77, radius * 1.05, radius * .48, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.translate(x, y); ctx.rotate(rotation);
+        circle(0, 0, radius); ctx.clip();
+        const color = number === 0 ? '#f2f0e4' : colors[(number - 1) % 8];
+        ctx.fillStyle = number > 8 ? '#ecece1' : color; ctx.fillRect(-radius, -radius, radius * 2, radius * 2);
+        if (number > 8) { ctx.fillStyle = color; ctx.fillRect(-radius, -radius * .55, radius * 2, radius * 1.1); }
+        const shading = ctx.createRadialGradient(-radius * .37, -radius * .46, 0, radius * .15, radius * .2, radius * 1.25);
+        shading.addColorStop(0, '#ffffff66'); shading.addColorStop(.35, '#ffffff05'); shading.addColorStop(.75, '#00000015'); shading.addColorStop(1, '#000000a0');
+        ctx.fillStyle = shading; ctx.fillRect(-radius, -radius, radius * 2, radius * 2);
+        if (number) {
+          circle(0, 0, radius * .43); ctx.fillStyle = '#f6f3e9'; ctx.fill();
+          ctx.fillStyle = '#17201e'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = `700 ${radius * .64}px "Segoe UI",sans-serif`; ctx.fillText(number, 0, .4);
+        }
+        ctx.rotate(-rotation);
+        const glint = ctx.createRadialGradient(-radius * .35, -radius * .51, 0, -radius * .35, -radius * .51, radius * .4);
+        glint.addColorStop(0, '#ffffffa0'); glint.addColorStop(1, '#ffffff00');
+        ctx.fillStyle = glint; ctx.fillRect(-radius, -radius, radius * 2, radius * 2); ctx.restore();
+      }
+      function draw(ms) {
+        ctx.clearRect(0, 0, W, H);
+        // A quiet outline of the cloth lets the break remain the focus.
+        ctx.save();
+        ctx.beginPath(); ctx.roundRect(56, 38, 788, 278, 30);
+        const cloth = ctx.createLinearGradient(0, 38, 0, 316); cloth.addColorStop(0, '#17493b66'); cloth.addColorStop(1, '#0b292055');
+        ctx.fillStyle = cloth; ctx.fill(); ctx.strokeStyle = '#6d978333'; ctx.lineWidth = 1; ctx.stroke();
+        ctx.beginPath(); ctx.roundRect(66, 48, 768, 258, 23); ctx.strokeStyle = '#77a08712'; ctx.stroke();
+        for (const [x, y] of [[70,52],[450,42],[830,52],[70,302],[450,312],[830,302]]) {
+          circle(x,y,7); ctx.fillStyle='#040d0c'; ctx.fill(); ctx.strokeStyle='#c8b27d25'; ctx.stroke();
+        }
+        ctx.setLineDash([2,9]); ctx.strokeStyle='#bed3c711'; ctx.beginPath(); ctx.moveTo(253,58);ctx.lineTo(253,296);ctx.stroke();ctx.restore();
+        const impact = 620, scatter = ease((ms - impact) / 1250);
+        // Cue-ball acceleration, then a small rebound after contact.
+        const approach = clamp(ms / impact);
+        const cueX = ms < impact ? lerp(116, 506, approach * approach) : lerp(506, 287, scatter);
+        const cueY = ms < impact ? 174 : lerp(174, 240, scatter);
+        if (ms < impact) {
+          ctx.save(); ctx.globalAlpha = approach * .22;
+          const trail = ctx.createLinearGradient(cueX - 110, 0, cueX, 0); trail.addColorStop(0,'#ffffff00'); trail.addColorStop(1,'#ffffff80');
+          ctx.fillStyle=trail;ctx.fillRect(cueX-110,170,104,8);ctx.restore();
+        }
+        const flash = clamp((ms - impact) / 460);
+        if (ms >= impact && flash < 1) {
+          ctx.save(); ctx.globalAlpha = (1-flash)*.3;ctx.strokeStyle='#dfc68c';ctx.lineWidth=1;
+          circle(521,174,18+flash*130);ctx.stroke();ctx.restore();
+        }
+        const dim = lerp(1, .57, ease((ms - 1500) / 650));
+        for (const b of balls.filter(b => b.n !== 8)) {
+          ball(lerp(b.x,b.end[0],scatter),lerp(b.y,b.end[1],scatter),R,b.n,b.spin*scatter,dim);
+        }
+        ball(cueX,cueY,R,0,0,dim);
+        const eight = balls.find(b => b.n === 8);
+        const e = ease((ms - impact) / 1500);
+        const eightX = lerp(eight.x,eight.end[0],e);
+        const eightY = lerp(eight.y,eight.end[1],e) - Math.sin(e*Math.PI)*32;
+        ball(eightX,eightY,lerp(R,32,e),8,(1-e)*Math.PI*2);
+        // The final eight-ball becomes the mark beside the wordmark.
+        ctx.save();ctx.globalAlpha=ease((ms-950)/1100);ctx.textAlign='left';ctx.textBaseline='alphabetic';
+        ctx.fillStyle='#f0f4ed';ctx.font='600 37px "Segoe UI",sans-serif';ctx.fillText('LOX',359,363);
+        ctx.fillStyle='#c6b27e';ctx.font='500 22px "Segoe UI",sans-serif';ctx.fillText('BILLIARD',449,363);
+        ctx.fillStyle='#79958a';ctx.font='10px "Segoe UI",sans-serif';ctx.fillText('P O I N T   O F   S A L E',361,386);ctx.restore();
+      }
+      function resize() {
+        const dpr = Math.min(devicePixelRatio || 1, 2);
+        canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        draw(motion.matches ? 2600 : (performance.now() - start) % 3700);
+      }
+      let frame;
+      function animate(now) {
+        // Repeat the break after holding the finished frame for one second.
+        draw(motion.matches ? 2600 : (now-start) % 3700);
+        if (!motion.matches) frame=requestAnimationFrame(animate);
+      }
+      resize();frame=requestAnimationFrame(animate);
+      addEventListener('resize',resize);
+      motion.addEventListener('change',()=>{cancelAnimationFrame(frame);resize();frame=requestAnimationFrame(animate);});
+      addEventListener('pagehide',()=>cancelAnimationFrame(frame),{once:true});
+    })();
+  </script>
+</body>
+</html>

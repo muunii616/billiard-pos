@@ -31,4 +31,3 @@ class ReceiptLineItem extends Model
         return $this->belongsTo(Receipt::class);
     }
 }
-

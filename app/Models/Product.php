@@ -13,7 +13,18 @@ class Product extends Model
         'name',
         'category',
         'price',
+        'cost_price',
         'is_active',
+        'stock_quantity',
+        'low_stock_threshold',
+    ];
+
+    protected $casts = [
+        'price' => 'decimal:2',
+        'cost_price' => 'decimal:2',
+        'is_active' => 'boolean',
+        'stock_quantity' => 'integer',
+        'low_stock_threshold' => 'integer',
     ];
 
     public function sessionItems()

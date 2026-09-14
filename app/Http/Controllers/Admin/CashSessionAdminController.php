@@ -2,21 +2,26 @@
 
 namespace App\Http\Controllers\Admin;
 
-use Barryvdh\DomPDF\Facade\Pdf;
 use App\Http\Controllers\Controller;
 use App\Models\CashSession;
+use App\Models\CashSessionProductStock;
+use App\Models\Product;
 use App\Models\Receipt;
 use App\Models\ReceiptPayment;
+use App\Models\StockAdjustment;
+use App\Models\StockUsage;
+use App\Support\PosDate;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class CashSessionAdminController extends Controller
 {
     private function inRangeReceiptQuery(\DateTimeInterface $from, \DateTimeInterface $to)
     {
-        return Receipt::query()
-            ->whereBetween('paid_at', [$from, $to])
-            ->whereNull('deleted_at')
-            ->where('status', '!=', 'voided');
+        return Receipt::paid()
+            ->whereBetween('paid_at', [$from, $to]);
     }
 
     private function summarizeBetween(\DateTimeInterface $from, \DateTimeInterface $to): array
@@ -84,31 +89,68 @@ class CashSessionAdminController extends Controller
     public function current()
     {
         $open = CashSession::query()->where('status', 'open')->latest('id')->first();
-        $latestClosed = CashSession::query()->where('status', 'closed')->latest('closed_at')->first();
+        $query = CashSession::query()->with(['openedBy', 'closedBy'])->where('status', 'closed');
+        if ($user = request('user')) {
+            $query->whereHas('openedBy', fn ($q) => $q->where('name', $user));
+        }
+        if ($month = request('month')) {
+            if (preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $month)) {
+                [$year, $monthNumber] = array_map('intval', explode('-', $month));
+                $start = PosDate::month(sprintf('%04d-%02d', $year, $monthNumber));
+                $query->whereBetween('closed_at', [$start->utc(), $start->endOfMonth()->utc()]);
+            }
+        }
+        $history = $query->latest('closed_at')->paginate(10)->withQueryString();
+        $users = CashSession::query()->where('status', 'closed')->with('openedBy')->get()->pluck('openedBy.name')->filter()->unique()->sort()->values();
 
         return response()->json([
             'open_session' => $this->presentSession($open),
-            'latest_closed_session' => $this->presentSession($latestClosed),
+            'history' => [
+                'data' => $history->getCollection()->map(fn ($session) => $this->presentSession($session))->values(),
+                'current_page' => $history->currentPage(),
+                'last_page' => $history->lastPage(),
+                'total' => $history->total(),
+            ],
+            'users' => $users,
         ]);
     }
 
     public function open(Request $request)
     {
-        $existingOpen = CashSession::query()->where('status', 'open')->first();
-        if ($existingOpen) {
-            return response()->json(['message' => 'There is already an open shift. Close it first.'], 422);
-        }
-
         $data = $request->validate([
             'opening_cash' => ['required', 'numeric', 'min:0'],
         ]);
 
-        $session = CashSession::query()->create([
-            'status' => 'open',
-            'opening_cash' => round((float) $data['opening_cash'], 2),
-            'opened_at' => now(),
-            'opened_by_user_id' => $request->user()?->id,
-        ]);
+        try {
+            $session = DB::transaction(function () use ($request, $data) {
+                $existingOpen = CashSession::query()->where('status', 'open')->lockForUpdate()->first();
+                if ($existingOpen) {
+                    throw ValidationException::withMessages([
+                        'shift' => 'There is already an open shift. Close it first.',
+                    ]);
+                }
+
+                $session = CashSession::query()->create([
+                    'status' => 'open',
+                    'opening_cash' => round((float) $data['opening_cash'], 2),
+                    'opened_at' => now('UTC'),
+                    'opened_by_user_id' => $request->user()?->id,
+                ]);
+                foreach (Product::query()->get(['id', 'stock_quantity']) as $product) {
+                    CashSessionProductStock::create([
+                        'cash_session_id' => $session->id,
+                        'product_id' => $product->id,
+                        'opening_stock' => $product->stock_quantity,
+                    ]);
+                }
+
+                return $session;
+            });
+        } catch (ValidationException $e) {
+            return response()->json([
+                'message' => collect($e->errors())->flatten()->first() ?: 'There is already an open shift. Close it first.',
+            ], 422);
+        }
 
         return response()->json([
             'message' => 'Shift opened.',
@@ -128,7 +170,7 @@ class CashSessionAdminController extends Controller
             'variance_reason' => ['nullable', 'string', 'max:2000'],
         ]);
 
-        $closedAt = now();
+        $closedAt = now('UTC');
         $summary = $this->summarizeBetween($session->opened_at ?? $session->created_at, $closedAt);
         $expectedCash = round((float) $session->opening_cash + $summary['cash_sales'], 2);
         $countedCash = round((float) $data['counted_cash'], 2);
@@ -153,6 +195,9 @@ class CashSessionAdminController extends Controller
             'card_sales' => $summary['card_sales'],
             'transfer_sales' => $summary['transfer_sales'],
         ]);
+        foreach (CashSessionProductStock::query()->where('cash_session_id', $session->id)->get() as $snapshot) {
+            $snapshot->update(['closing_stock' => Product::find($snapshot->product_id)?->stock_quantity ?? 0]);
+        }
 
         return response()->json([
             'message' => 'Shift closed.',
@@ -180,8 +225,44 @@ class CashSessionAdminController extends Controller
             }
         }
 
+        $from = $cashSession->opened_at ?? $cashSession->created_at;
+        $to = $cashSession->closed_at ?? now();
+        $receipts = $this->inRangeReceiptQuery($from, $to)->with('lineItems')->get();
+        $productSales = $receipts->flatMap->lineItems
+            ->where('type', 'product')
+            ->groupBy('description')
+            ->map(fn ($items, $description) => [
+                'description' => $description,
+                'quantity' => $items->sum('quantity'),
+                'total' => $items->sum('subtotal'),
+            ])->values();
+        $tableTimeTotal = $receipts->sum('time_total');
+        $externalUsages = StockUsage::query()->with(['product', 'user'])
+            ->whereBetween('used_at', [$from, $to])
+            ->orderBy('used_at')
+            ->get();
+        $stockAdjustments = StockAdjustment::query()->with(['product', 'user'])
+            ->whereBetween('adjusted_at', [$from, $to])->orderBy('adjusted_at')->get();
+        $stockSnapshots = CashSessionProductStock::query()->with('product')->where('cash_session_id', $cashSession->id)->get();
+        $soldByProduct = $receipts->flatMap->lineItems->where('type', 'product')->groupBy('description')->map(fn ($items) => $items->sum('quantity'));
+        $usedByProduct = $externalUsages->groupBy('product_id')->map(fn ($items) => $items->sum('quantity'));
+        $adjustedByProduct = $stockAdjustments->groupBy('product_id')->map(fn ($items) => $items->sum('quantity_change'));
+        $stockReport = $stockSnapshots->map(function ($snapshot) use ($soldByProduct, $usedByProduct, $adjustedByProduct) {
+            $name = $snapshot->product->name;
+            $sold = (int) ($soldByProduct[$name] ?? 0);
+            $used = (int) ($usedByProduct[$snapshot->product_id] ?? 0);
+            $adjusted = (int) ($adjustedByProduct[$snapshot->product_id] ?? 0);
+
+            return ['product' => $name, 'opening' => $snapshot->opening_stock, 'adjusted' => $adjusted, 'sold' => $sold, 'external' => $used, 'expected' => $snapshot->opening_stock + $adjusted - $sold - $used, 'closing' => $snapshot->closing_stock ?? $snapshot->product->stock_quantity];
+        });
+
         $pdf = Pdf::loadView('pdf.cash-session-receipt', [
             'session' => $cashSession->loadMissing(['openedBy', 'closedBy']),
+            'productSales' => $productSales,
+            'tableTimeTotal' => $tableTimeTotal,
+            'externalUsages' => $externalUsages,
+            'stockAdjustments' => $stockAdjustments,
+            'stockReport' => $stockReport,
             'appName' => config('app.name', 'Lox Billiard'),
             'logoDataUri' => $logoDataUri,
         ])->setPaper('a4', 'portrait');

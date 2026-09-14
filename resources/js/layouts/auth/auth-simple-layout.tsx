@@ -9,14 +9,17 @@ export default function AuthSimpleLayout({
 }: AuthLayoutProps) {
     return (
         <div className="flex min-h-svh flex-col items-center justify-center bg-gradient-to-br from-emerald-950/95 via-slate-900 to-slate-900 p-4 sm:p-6">
-            <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_0%,rgba(16,185,129,0.12),transparent)]" aria-hidden />
+            <div
+                className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_0%,rgba(16,185,129,0.12),transparent)]"
+                aria-hidden
+            />
             <div className="relative w-full max-w-[400px]">
                 <div className="rounded-2xl border border-white/10 bg-card/95 p-8 shadow-xl shadow-black/20 backdrop-blur-sm sm:p-10">
                     <div className="flex flex-col gap-8">
                         <div className="flex flex-col items-center gap-5">
                             <Link
                                 href={home()}
-                                className="flex flex-col items-center gap-3 no-underline outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background rounded-lg"
+                                className="flex flex-col items-center gap-3 rounded-lg no-underline outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                             >
                                 <div className="flex h-16 w-16 items-center justify-center">
                                     <img

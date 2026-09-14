@@ -6,10 +6,13 @@ use App\Http\Controllers\Controller;
 use App\Models\Receipt;
 use App\Models\ReceiptLineItem;
 use App\Models\ReceiptPayment;
+use App\Support\PosDate;
+use App\Support\PosTransaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class ReceiptAdminController extends Controller
 {
@@ -47,141 +50,153 @@ class ReceiptAdminController extends Controller
 
     public function update(Request $request, Receipt $receipt)
     {
-        $data = $request->validate([
-            'status' => ['sometimes', 'required', 'string', 'in:paid,unpaid,voided'],
-            'paid_at' => ['nullable', 'date'],
-            'customer_email' => ['nullable', 'string', 'max:255'],
-            'line_items' => ['sometimes', 'array', 'min:1'],
-            'line_items.*.type' => ['required_with:line_items', 'string', 'in:time,product,adjustment'],
-            'line_items.*.description' => ['required_with:line_items', 'string', 'max:255'],
-            'line_items.*.quantity' => ['required_with:line_items', 'numeric', 'min:0'],
-            'line_items.*.unit_price' => ['required_with:line_items', 'numeric', 'min:0'],
-            'line_items.*.subtotal' => ['required_with:line_items', 'numeric', 'min:0'],
-            'payments' => ['sometimes', 'array'],
-            'payments.*.method' => ['required_with:payments', 'string', Rule::in(config('pos.payment_methods', []))],
-            'payments.*.amount' => ['required_with:payments', 'numeric', 'min:0'],
-        ]);
+        return PosTransaction::receipt($receipt, function (Receipt $receipt) use ($request) {
+            $data = $request->validate([
+                'status' => ['sometimes', 'required', 'string', 'in:paid,unpaid,voided'],
+                'paid_at' => ['nullable', 'date'],
+                'customer_email' => ['nullable', 'email', 'max:255'],
+                'line_items' => ['sometimes', 'array', 'min:1'],
+                'line_items.*.type' => ['required_with:line_items', 'string', 'in:time,product,adjustment'],
+                'line_items.*.description' => ['required_with:line_items', 'string', 'max:255'],
+                'line_items.*.quantity' => ['required_with:line_items', 'numeric', 'min:0'],
+                'line_items.*.unit_price' => ['required_with:line_items', 'numeric', 'min:0'],
+                'line_items.*.subtotal' => ['required_with:line_items', 'numeric', 'min:0'],
+                'payments' => ['sometimes', 'array'],
+                'payments.*.method' => ['required_with:payments', 'string', Rule::in(config('pos.payment_methods', []))],
+                'payments.*.amount' => ['required_with:payments', 'numeric', 'min:0'],
+            ]);
 
-        DB::transaction(function () use ($receipt, $data) {
-            if (array_key_exists('customer_email', $data)) {
-                $receipt->customer_email = $data['customer_email'] ?: null;
-            }
-
-            if (array_key_exists('status', $data)) {
-                $receipt->status = $data['status'];
-                if ($data['status'] === 'voided') {
-                    $receipt->voided_at = $receipt->voided_at ?? now();
-                } else {
-                    $receipt->voided_at = null;
-                    $receipt->void_reason = null;
-                }
-            }
-
-            if (array_key_exists('paid_at', $data)) {
-                $receipt->paid_at = $data['paid_at'] ? Carbon::parse($data['paid_at']) : null;
-                if ($receipt->status !== 'voided') {
-                    $receipt->status = $receipt->paid_at ? 'paid' : 'unpaid';
-                }
-            }
-
-            if (array_key_exists('line_items', $data)) {
-                $receipt->lineItems()->delete();
-                foreach ($data['line_items'] as $li) {
-                    $receipt->lineItems()->create([
-                        'type' => $li['type'],
-                        'description' => $li['description'],
-                        'quantity' => $li['quantity'],
-                        'unit_price' => $li['unit_price'],
-                        'subtotal' => $li['subtotal'],
-                    ]);
+            DB::transaction(function () use ($receipt, $data) {
+                if (array_key_exists('customer_email', $data)) {
+                    $receipt->customer_email = $data['customer_email'] ?: null;
                 }
 
-                $timeTotal = (float) collect($data['line_items'])->where('type', 'time')->sum('subtotal');
-                $productsTotal = (float) collect($data['line_items'])->whereIn('type', ['product', 'adjustment'])->sum('subtotal');
-                $grandTotal = round($timeTotal + $productsTotal, 2);
-                $receipt->time_total = round($timeTotal, 2);
-                $receipt->products_total = round($productsTotal, 2);
-                $receipt->grand_total = $grandTotal;
-            }
-
-            if (array_key_exists('payments', $data)) {
-                $receipt->payments()->delete();
-                foreach ($data['payments'] as $p) {
-                    if ((float) $p['amount'] <= 0) {
-                        continue;
+                if (array_key_exists('status', $data)) {
+                    if ($data['status'] === 'paid' && $receipt->checkout_session_id) {
+                        $latest = Receipt::where('checkout_session_id', $receipt->checkout_session_id)->latest('id')->first();
+                        if ($receipt->checkoutSession->isOpen() || $latest->id !== $receipt->id) {
+                            throw ValidationException::withMessages(['status' => 'Complete the open tab to issue its payment receipt.']);
+                        }
                     }
-                    $receipt->payments()->create([
-                        'method' => $p['method'],
-                        'amount' => round((float) $p['amount'], 2),
-                    ]);
+                    $receipt->status = $data['status'];
+                    if ($data['status'] === 'paid') {
+                        $receipt->paid_at ??= now('UTC');
+                    } elseif ($data['status'] === 'unpaid') {
+                        $receipt->paid_at = null;
+                    }
+                    if ($data['status'] === 'voided') {
+                        $receipt->voided_at = $receipt->voided_at ?? now();
+                    } else {
+                        $receipt->voided_at = null;
+                        $receipt->void_reason = null;
+                    }
                 }
-            }
 
-            $receipt->save();
+                if (array_key_exists('paid_at', $data)) {
+                    $receipt->paid_at = $data['paid_at'] ? Carbon::parse($data['paid_at'], PosDate::timezone())->utc() : null;
+                    if ($receipt->status !== 'voided') {
+                        $receipt->status = $receipt->paid_at ? 'paid' : 'unpaid';
+                    }
+                }
+
+                if (array_key_exists('line_items', $data)) {
+                    $receipt->lineItems()->delete();
+                    foreach ($data['line_items'] as $li) {
+                        $receipt->lineItems()->create([
+                            'type' => $li['type'],
+                            'description' => $li['description'],
+                            'quantity' => $li['quantity'],
+                            'unit_price' => $li['unit_price'],
+                            'subtotal' => $li['subtotal'],
+                        ]);
+                    }
+
+                    $timeTotal = (float) collect($data['line_items'])->where('type', 'time')->sum('subtotal');
+                    $productsTotal = (float) collect($data['line_items'])->whereIn('type', ['product', 'adjustment'])->sum('subtotal');
+                    $grandTotal = round($timeTotal + $productsTotal, 2);
+                    $receipt->time_total = round($timeTotal, 2);
+                    $receipt->products_total = round($productsTotal, 2);
+                    $receipt->grand_total = $grandTotal;
+                }
+
+                if (array_key_exists('payments', $data)) {
+                    $receipt->payments()->delete();
+                    foreach ($data['payments'] as $p) {
+                        if ((float) $p['amount'] <= 0) {
+                            continue;
+                        }
+                        $receipt->payments()->create([
+                            'method' => $p['method'],
+                            'amount' => round((float) $p['amount'], 2),
+                        ]);
+                    }
+                }
+
+                $receipt->save();
+            });
+
+            return response()->json(['message' => 'Receipt updated.']);
         });
-
-        return response()->json(['message' => 'Receipt updated.']);
     }
 
     public function void(Request $request, Receipt $receipt)
     {
-        $data = $request->validate([
-            'reason' => ['nullable', 'string', 'max:255'],
-        ]);
+        return PosTransaction::receipt($receipt, function (Receipt $receipt) use ($request) {
+            $data = $request->validate([
+                'reason' => ['nullable', 'string', 'max:255'],
+            ]);
 
-        $receipt->update([
-            'status' => 'voided',
-            'voided_at' => now(),
-            'void_reason' => $data['reason'] ?? null,
-        ]);
+            $receipt->update([
+                'status' => 'voided',
+                'voided_at' => now(),
+                'void_reason' => $data['reason'] ?? null,
+            ]);
 
-        return response()->json(['message' => 'Receipt voided.']);
+            return response()->json(['message' => 'Receipt voided.']);
+        });
     }
 
     public function destroy(Receipt $receipt)
     {
-        $receipt->delete();
+        return PosTransaction::receipt($receipt, function (Receipt $receipt) {
+            $receipt->delete();
 
-        return response()->json(['message' => 'Receipt deleted.']);
+            return response()->json(['message' => 'Receipt deleted.']);
+        });
     }
 
     public function exportCsv(Request $request)
     {
-        $mode = $request->query('mode', 'daily');
-        $date = (string) $request->query('date', now()->toDateString());
-        $month = (string) $request->query('month', now()->format('Y-m'));
+        [$localStart, $localEnd, $mode, $date, $month] = PosDate::reportRange($request);
+        $start = $localStart->utc();
+        $end = $localEnd->utc();
 
-        if ($mode === 'monthly') {
-            $start = Carbon::createFromFormat('Y-m', $month)->startOfMonth();
-            $end = (clone $start)->endOfMonth();
-        } else {
-            $start = Carbon::createFromFormat('Y-m-d', $date)->startOfDay();
-            $end = (clone $start)->endOfDay();
-        }
-
-        $receipts = Receipt::query()
+        $receipts = Receipt::paid()
             ->whereBetween('paid_at', [$start, $end])
-            ->whereNull('deleted_at')
-            ->where('status', '!=', 'voided')
+            ->with(['lineItems', 'payments'])
             ->orderByDesc('paid_at')
             ->get(['id', 'receipt_number', 'paid_at', 'customer_email', 'time_total', 'products_total', 'grand_total', 'status']);
 
         $lines = [];
-        $lines[] = ['id', 'receipt_number', 'paid_at', 'status', 'customer_email', 'time_total', 'products_total', 'grand_total'];
+        $lines[] = ['id', 'receipt_number', 'paid_at', 'status', 'customer_email', 'line_type', 'description', 'quantity', 'unit_price', 'line_subtotal', 'table_time_started', 'table_time_ended', 'table_duration', 'payment_split', 'time_total', 'products_total', 'grand_total'];
         foreach ($receipts as $r) {
-            $lines[] = [
-                $r->id,
-                $r->receipt_number,
-                optional($r->paid_at)->toIso8601String(),
-                $r->status,
-                $r->customer_email,
-                (float) $r->time_total,
-                (float) $r->products_total,
-                (float) $r->grand_total,
-            ];
+            $paymentSplit = $r->payments->map(fn ($payment) => $payment->method.' '.number_format((float) $payment->amount, 2, '.', ''))->implode(' | ');
+            $items = $r->lineItems;
+            if ($items->isEmpty()) {
+                $items = collect([null]);
+            }
+            foreach ($items as $item) {
+                $meta = $item?->meta ?? [];
+                $lines[] = [
+                    $r->id, $r->receipt_number, $r->paid_at?->copy()->setTimezone(PosDate::timezone())->toIso8601String(), $r->status, $r->customer_email,
+                    $item?->type, $item?->description, $item ? (float) $item->quantity : null, $item ? (float) $item->unit_price : null,
+                    $item ? (float) $item->subtotal : null, $meta['from'] ?? null, $meta['to'] ?? null, $meta['duration'] ?? null,
+                    $paymentSplit, (float) $r->time_total, (float) $r->products_total, (float) $r->grand_total,
+                ];
+            }
         }
 
-        $filename = 'receipts_' . ($mode === 'monthly' ? $month : $date) . '.csv';
+        $filename = 'receipts_'.($mode === 'monthly' ? $month : $date).'.csv';
 
         $handle = fopen('php://temp', 'r+');
         foreach ($lines as $row) {
@@ -197,4 +212,3 @@ class ReceiptAdminController extends Controller
         ]);
     }
 }
-

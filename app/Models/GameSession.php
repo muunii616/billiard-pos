@@ -23,6 +23,8 @@ class GameSession extends Model
         'ended_at',
         'total_minutes',
         'time_total',
+        'cancel_reason',
+        'cancelled_by_user_id',
     ];
 
     protected $casts = [
@@ -47,6 +49,11 @@ class GameSession extends Model
         return $this->belongsTo(User::class);
     }
 
+    public function cancelledBy()
+    {
+        return $this->belongsTo(User::class, 'cancelled_by_user_id');
+    }
+
     public function items()
     {
         return $this->hasMany(SessionItem::class);
@@ -65,5 +72,17 @@ class GameSession extends Model
     public function isActive(): bool
     {
         return in_array((string) $this->status, self::ACTIVE_STATUSES, true);
+    }
+
+    public function playedSeconds(?\DateTimeInterface $asOf = null): int
+    {
+        $base = (int) $this->total_played_seconds;
+        $resumeAt = $this->last_resume_at ?? $this->started_at;
+
+        if ($this->status !== 'running' || ! $resumeAt) {
+            return $base;
+        }
+
+        return $base + max(0, (int) $resumeAt->diffInSeconds($asOf ?? now('UTC'), false));
     }
 }

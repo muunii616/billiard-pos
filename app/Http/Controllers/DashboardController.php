@@ -6,36 +6,19 @@ use App\Models\BilliardTable;
 use App\Models\CheckoutSession;
 use App\Models\GameSession;
 use App\Models\Receipt;
-use Illuminate\Support\Carbon;
+use App\Support\PosDate;
+use App\Support\TableTimeBilling;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class DashboardController extends Controller
 {
-    /** Billable seconds for a running/paused session (played time only). */
-    private function sessionPlayedSeconds(GameSession $session, ?\DateTimeInterface $asOf = null): int
-    {
-        $asOf = $asOf ?? now();
-        $base = (int) ($session->total_played_seconds ?? 0);
-        if ($session->status === 'paused') {
-            return $base;
-        }
-        $resumeAt = $session->last_resume_at ?? $session->started_at;
-        if (! $resumeAt) {
-            return $base;
-        }
-        $resumeAt = $resumeAt instanceof \Carbon\Carbon ? $resumeAt->copy()->setTimezone(config('app.timezone')) : \Carbon\Carbon::parse($resumeAt, config('app.timezone'));
-        $now = $asOf instanceof \Carbon\Carbon ? $asOf->copy()->setTimezone(config('app.timezone')) : \Carbon\Carbon::parse($asOf, config('app.timezone'));
-
-        return $base + max(0, (int) $resumeAt->diffInSeconds($now, true));
-    }
-
     public function __invoke(): Response
     {
-        $todayStart = Carbon::today()->startOfDay();
-        $todayEnd = Carbon::today()->endOfDay();
+        $todayStart = PosDate::now()->startOfDay()->utc();
+        $todayEnd = PosDate::now()->endOfDay()->utc();
 
-        $revenueSums = Receipt::whereBetween('paid_at', [$todayStart, $todayEnd])
+        $revenueSums = Receipt::paid()->whereBetween('paid_at', [$todayStart, $todayEnd])
             ->selectRaw('COALESCE(SUM(grand_total), 0) as total, COALESCE(SUM(time_total), 0) as time_total, COALESCE(SUM(products_total), 0) as products_total')
             ->first();
         $todayRevenue = (float) ($revenueSums->total ?? 0);
@@ -54,12 +37,10 @@ class DashboardController extends Controller
         $isAdmin = auth()->user()?->role === 'admin';
 
         $now = now();
-        $appTz = config('app.timezone');
+        $appTz = config('app.display_timezone');
 
-        $tables = BilliardTable::with(['sessions' => function ($q) {
-            $q->with('items')->latest()->limit(1);
-        }])->orderBy('id')->get()->map(function (BilliardTable $table) use ($now, $appTz) {
-            $session = $table->sessions->first();
+        $tables = BilliardTable::with(['latestGameSession.items'])->orderBy('id')->get()->map(function (BilliardTable $table) use ($now, $appTz) {
+            $session = $table->latestGameSession;
             $inPlay = $session?->isActive() ?? false;
 
             $elapsedSeconds = null;
@@ -71,16 +52,16 @@ class DashboardController extends Controller
             $itemsTotal = 0;
 
             if ($inPlay) {
-                $playedSeconds = $this->sessionPlayedSeconds($session, $now);
+                $playedSeconds = $session->playedSeconds($now);
                 $elapsedFormatted = gmdate('H:i:s', $playedSeconds);
-                $timeTotal = round(($playedSeconds / 60) * (float) config('pos.rate_per_minute', 0.20), 2);
+                $timeTotal = TableTimeBilling::totalForSeconds($playedSeconds);
                 $itemsTotal = (float) $session->items->sum('total_price');
                 $currentBill = round(max(0, $timeTotal + $itemsTotal), 2);
                 $startedAt = $session->started_at?->copy()->setTimezone($appTz)->format('g:i A');
                 $minutes = (int) floor($playedSeconds / 60);
                 $durationFormatted = $minutes >= 60
-                    ? (int) floor($minutes / 60) . 'h ' . ($minutes % 60) . 'm'
-                    : $minutes . 'm';
+                    ? (int) floor($minutes / 60).'h '.($minutes % 60).'m'
+                    : $minutes.'m';
                 // The client derives the live segment from last_resume_at.
                 $elapsedSeconds = (int) ($session->total_played_seconds ?? 0);
                 if ($session->status === 'running' && $session->last_resume_at) {
@@ -129,7 +110,8 @@ class DashboardController extends Controller
                 'tables_total' => $tablesTotal,
                 'open_tabs_count' => $openTabsCount,
             ],
-            'rate_per_minute' => (float) config('pos.rate_per_minute', 0.20),
+            'rate_per_minute' => TableTimeBilling::ratePerMinute(),
+            'rounding_increment' => TableTimeBilling::roundingIncrement(),
             'tables' => $tables,
             'running_sessions' => $runningSessions,
             'isAdmin' => $isAdmin,

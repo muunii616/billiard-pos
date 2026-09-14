@@ -28,23 +28,23 @@ return new class extends Migration
         });
 
         if (DB::getDriverName() === 'mysql') {
-            DB::statement("
+            DB::statement('
                 UPDATE session_items si
                 LEFT JOIN products p ON p.id = si.product_id
                 SET
                     si.product_name = COALESCE(si.product_name, p.name),
                     si.product_category = COALESCE(si.product_category, p.category)
                 WHERE si.product_name IS NULL OR si.product_category IS NULL
-            ");
+            ');
 
-            DB::statement("
+            DB::statement('
                 UPDATE checkout_session_items csi
                 LEFT JOIN products p ON p.id = csi.product_id
                 SET
                     csi.product_name = COALESCE(csi.product_name, p.name),
                     csi.product_category = COALESCE(csi.product_category, p.category)
                 WHERE csi.product_name IS NULL OR csi.product_category IS NULL
-            ");
+            ');
 
             DB::statement('ALTER TABLE session_items DROP FOREIGN KEY session_items_product_id_foreign');
             DB::statement('ALTER TABLE session_items MODIFY product_id BIGINT UNSIGNED NULL');
@@ -85,4 +85,3 @@ return new class extends Migration
         });
     }
 };
-

@@ -1,5 +1,5 @@
 import { Head, router, useForm } from '@inertiajs/react';
-import { CheckCircle2Icon, SettingsIcon, Trash2Icon } from 'lucide-react';
+import { CheckCircle2Icon, SettingsIcon, Trash2Icon, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import InvoiceDialog from '@/components/invoice-dialog';
 import type { InvoiceReceipt } from '@/components/invoice-dialog';
@@ -32,11 +32,15 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import AppLayout from '@/layouts/app-layout';
+import { normalizeCategory } from '@/lib/categories';
+import { postJson } from '@/lib/http';
+import { inertiaPost } from '@/lib/inertia-action';
 import {
-    buildRawPayments,
+    buildExactSettlementPayments,
+    clampNonCashInput,
     formatMoney,
     paymentPreview,
-    validateOverpayAllowed,
+    roundMoney,
 } from '@/lib/payments';
 import type { BreadcrumbItem } from '@/types';
 
@@ -45,7 +49,10 @@ type Product = {
     name: string;
     category: string;
     price: string;
+    cost_price: string;
     is_active: boolean;
+    stock_quantity: number;
+    low_stock_threshold: number;
 };
 
 type Props = {
@@ -53,6 +60,7 @@ type Props = {
     openCheckouts: { id: number; label: string }[];
     runningTables: { id: number; name: string; status: string }[];
     isAdmin?: boolean;
+    users: { id: number; name: string }[];
 };
 
 type CartItem = {
@@ -78,40 +86,10 @@ export default function AdminProducts({
     openCheckouts,
     runningTables,
     isAdmin = false,
+    users,
 }: Props) {
     const DEFAULT_CATEGORIES = ['Drinks', 'Snacks', 'Sets'] as const;
     const money = formatMoney;
-
-    const normalizeCategory = (raw: string): string => {
-        const value = (raw || '').trim();
-        const key = value.toLowerCase();
-
-        if (key === 'drink' || key === 'drinks') {
-            return 'Drinks';
-        }
-
-        if (key === 'snack' || key === 'snacks') {
-            return 'Snacks';
-        }
-
-        if (
-            key === 'set' ||
-            key === 'sets' ||
-            key === 'combo' ||
-            key === 'combos'
-        ) {
-            return 'Sets';
-        }
-
-        return value
-            .split(/\s+/)
-            .filter(Boolean)
-            .map(
-                (part) =>
-                    part.charAt(0).toUpperCase() + part.slice(1).toLowerCase(),
-            )
-            .join(' ');
-    };
 
     const categoryOptions = Array.from(
         new Set([
@@ -135,15 +113,32 @@ export default function AdminProducts({
         name: '',
         category: 'Snacks',
         price: '',
+        cost_price: '',
+        stock_quantity: '0',
+        low_stock_threshold: '5',
     });
 
     const editForm = useForm({
         name: '',
         category: '',
         price: '',
+        cost_price: '',
+        stock_quantity: '0',
+        low_stock_threshold: '5',
     });
 
     const [createOpen, setCreateOpen] = useState(false);
+    const [stockOpen, setStockOpen] = useState(false);
+    const [stockCart, setStockCart] = useState<
+        { productId: number; name: string; quantity: string }[]
+    >([]);
+    const [stockError, setStockError] = useState<string | null>(null);
+    const [externalOpen, setExternalOpen] = useState(false);
+    const [externalUser, setExternalUser] = useState('');
+    const [externalCart, setExternalCart] = useState<
+        { productId: number; name: string; quantity: string }[]
+    >([]);
+    const [externalError, setExternalError] = useState<string | null>(null);
     const [editProduct, setEditProduct] = useState<Product | null>(null);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [deletingProduct, setDeletingProduct] = useState(false);
@@ -267,40 +262,6 @@ export default function AdminProducts({
         setCustomerEmail('');
     };
 
-    const getCsrfToken = () =>
-        document.cookie
-            .split('; ')
-            .find((row) => row.startsWith('XSRF-TOKEN='))
-            ?.split('=')[1];
-
-    const postJson = async (url: string, payload: unknown) => {
-        const token = getCsrfToken();
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            'X-Requested-With': 'XMLHttpRequest',
-        };
-
-        if (token) {
-            headers['X-XSRF-TOKEN'] = decodeURIComponent(token);
-        }
-
-        const response = await fetch(url, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(payload),
-        });
-        const json = await response.json().catch(() => ({}));
-
-        if (!response.ok) {
-            const message = json?.message || 'Request failed.';
-
-            throw new Error(message);
-        }
-
-        return json;
-    };
-
     const posItemsPayload = () =>
         cart.map((item) => ({
             product_id: item.productId,
@@ -317,6 +278,10 @@ export default function AdminProducts({
         parseFloat(transfer) || 0,
         cartTotal,
     );
+    const cardNum = roundMoney(parseFloat(card) || 0);
+    const transferNum = roundMoney(parseFloat(transfer) || 0);
+    const maxCardAmount = Math.max(0, roundMoney(cartTotal) - transferNum);
+    const maxTransferAmount = Math.max(0, roundMoney(cartTotal) - cardNum);
 
     const handleOpenActions = () => {
         setPosError(null);
@@ -360,46 +325,59 @@ export default function AdminProducts({
         }
     };
 
-    const handleAddToExistingTab = () => {
+    const handleAddToExistingTab = async () => {
         if (!selectedCheckoutId) {
             setPosError('Select an open tab first.');
 
             return;
         }
 
-        router.post(
-            `/checkouts/${selectedCheckoutId}/items/bulk`,
+        const checkoutId = selectedCheckoutId;
+        setExistingTabOpen(false);
+        const result = await inertiaPost(
+            `/checkouts/${checkoutId}/items/bulk`,
             { items: posItemsPayload() },
-            {
-                preserveScroll: true,
-                onSuccess: () => {
-                    setExistingTabOpen(false);
-                    setPosMessage(`Added items to Tab #${selectedCheckoutId}.`);
-                    setCart([]);
-                },
-            },
         );
+
+        if (result !== 'success') {
+            if (result === 'error') {
+                setPosError('Failed to add items to tab. Refreshing…');
+            }
+
+            router.reload({ preserveScroll: true });
+
+            return;
+        }
+
+        setPosMessage(`Added items to Tab #${checkoutId}.`);
+        setCart([]);
     };
 
-    const handleAddToRunningTable = () => {
+    const handleAddToRunningTable = async () => {
         if (!selectedTableId) {
             setPosError('Select a running table first.');
 
             return;
         }
 
-        router.post(
-            `/tables/${selectedTableId}/items/bulk`,
-            { items: posItemsPayload() },
-            {
-                preserveScroll: true,
-                onSuccess: () => {
-                    setRunningTableOpen(false);
-                    setPosMessage('Added items to running table session.');
-                    setCart([]);
-                },
-            },
-        );
+        const tableId = selectedTableId;
+        setRunningTableOpen(false);
+        const result = await inertiaPost(`/tables/${tableId}/items/bulk`, {
+            items: posItemsPayload(),
+        });
+
+        if (result !== 'success') {
+            if (result === 'error') {
+                setPosError('Failed to add items to table. Refreshing…');
+            }
+
+            router.reload({ preserveScroll: true });
+
+            return;
+        }
+
+        setPosMessage('Added items to running table session.');
+        setCart([]);
     };
 
     const handleActionPayNow = () => {
@@ -444,7 +422,7 @@ export default function AdminProducts({
             return;
         }
 
-        const validation = validateOverpayAllowed({
+        const settlement = buildExactSettlementPayments({
             expected: cartTotal,
             cash: parseFloat(cash) || 0,
             card: parseFloat(card) || 0,
@@ -452,19 +430,15 @@ export default function AdminProducts({
             money,
         });
 
-        if (validation.error) {
+        if (settlement.error) {
             setPosError(
-                validation.error.replaceAll('grand total', 'cart total'),
+                settlement.error.replaceAll('grand total', 'cart total'),
             );
 
             return;
         }
 
-        const payments = buildRawPayments(
-            parseFloat(cash) || 0,
-            parseFloat(card) || 0,
-            parseFloat(transfer) || 0,
-        );
+        const payments = settlement.payments;
 
         setPaying(true);
 
@@ -557,6 +531,9 @@ export default function AdminProducts({
             name: product.name,
             category: normalizeCategory(product.category),
             price: String(product.price),
+            cost_price: String(product.cost_price ?? 0),
+            stock_quantity: String(product.stock_quantity),
+            low_stock_threshold: String(product.low_stock_threshold),
         });
     };
 
@@ -564,6 +541,72 @@ export default function AdminProducts({
         setEditProduct(null);
         editForm.reset();
         editForm.clearErrors();
+    };
+
+    const addStockProduct = (product: Product) => {
+        setStockCart((previous) => {
+            const existing = previous.find(
+                (item) => item.productId === product.id,
+            );
+
+            return existing
+                ? previous.map((item) =>
+                      item.productId === product.id
+                          ? { ...item, quantity: item.quantity + 1 }
+                          : item,
+                  )
+                : [
+                      ...previous,
+                      {
+                          productId: product.id,
+                          name: product.name,
+                          quantity: '1',
+                      },
+                  ];
+        });
+    };
+
+    const submitStock = () => {
+        setStockError(null);
+        const invalid = stockCart.some(
+            (item) =>
+                item.quantity.trim() === '' ||
+                item.quantity === '-' ||
+                !Number.isInteger(Number(item.quantity)),
+        );
+
+        if (invalid) {
+            setStockError('Enter a whole number for every selected product.');
+
+            return;
+        }
+
+        router.post(
+            '/admin/products/stock',
+            {
+                items: stockCart
+                    .filter(
+                        (item) =>
+                            item.quantity.trim() !== '' &&
+                            Number(item.quantity) !== 0,
+                    )
+                    .map((item) => ({
+                        product_id: item.productId,
+                        quantity: Number(item.quantity),
+                    })),
+            },
+            {
+                preserveScroll: true,
+                onSuccess: () => {
+                    setStockCart([]);
+                    setStockOpen(false);
+                },
+                onError: (errors) =>
+                    setStockError(
+                        errors.inventory || 'Could not update stock.',
+                    ),
+            },
+        );
     };
 
     const handleEdit = (e: React.FormEvent) => {
@@ -611,14 +654,33 @@ export default function AdminProducts({
                         <div className="text-sm font-medium text-muted-foreground">
                             Products POS
                         </div>
-                        {isAdmin && (
+                        <div className="flex gap-2">
                             <Button
-                                className="rounded-full px-4"
-                                onClick={() => setCreateOpen(true)}
+                                type="button"
+                                variant="outline"
+                                onClick={() => setExternalOpen(true)}
                             >
-                                + Add product
+                                External use
                             </Button>
-                        )}
+                            <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => {
+                                    setStockError(null);
+                                    setStockOpen(true);
+                                }}
+                            >
+                                + Stock
+                            </Button>
+                            {isAdmin && (
+                                <Button
+                                    className="rounded-full px-4"
+                                    onClick={() => setCreateOpen(true)}
+                                >
+                                    + Add product
+                                </Button>
+                            )}
+                        </div>
                     </div>
 
                     <div className="min-h-0 flex-1 overflow-hidden">
@@ -726,6 +788,12 @@ export default function AdminProducts({
                                                             ),
                                                         )}
                                                     </div>
+                                                    <div
+                                                        className={`text-xs ${product.stock_quantity <= product.low_stock_threshold ? 'text-amber-300' : 'text-emerald-200/70'}`}
+                                                    >
+                                                        Stock:{' '}
+                                                        {product.stock_quantity}
+                                                    </div>
                                                 </button>
                                                 {isAdmin && (
                                                     <Button
@@ -737,7 +805,7 @@ export default function AdminProducts({
                                                         onClick={() =>
                                                             openEdit(product)
                                                         }
-                                                    className="absolute top-3 right-3 z-10 size-7 rounded-full text-emerald-100 hover:bg-emerald-700 hover:text-white"
+                                                        className="absolute top-3 right-3 z-10 size-7 rounded-full text-emerald-100 hover:bg-emerald-700 hover:text-white"
                                                     >
                                                         <SettingsIcon className="size-4" />
                                                     </Button>
@@ -1031,7 +1099,7 @@ export default function AdminProducts({
                             </label>
                             <Input
                                 type="number"
-                                step="0.01"
+                                step="1"
                                 min={0}
                                 value={cash}
                                 onChange={(e) => setCash(e.target.value)}
@@ -1043,10 +1111,19 @@ export default function AdminProducts({
                             </label>
                             <Input
                                 type="number"
-                                step="0.01"
+                                step="1"
                                 min={0}
+                                max={maxCardAmount}
+                                title={`Max ${money(maxCardAmount)} (with current transfer)`}
                                 value={card}
-                                onChange={(e) => setCard(e.target.value)}
+                                onChange={(e) =>
+                                    setCard(
+                                        clampNonCashInput(
+                                            e.target.value,
+                                            maxCardAmount,
+                                        ),
+                                    )
+                                }
                             />
                         </div>
                         <div className="flex items-center gap-2">
@@ -1055,10 +1132,19 @@ export default function AdminProducts({
                             </label>
                             <Input
                                 type="number"
-                                step="0.01"
+                                step="1"
                                 min={0}
+                                max={maxTransferAmount}
+                                title={`Max ${money(maxTransferAmount)} (with current card)`}
                                 value={transfer}
-                                onChange={(e) => setTransfer(e.target.value)}
+                                onChange={(e) =>
+                                    setTransfer(
+                                        clampNonCashInput(
+                                            e.target.value,
+                                            maxTransferAmount,
+                                        ),
+                                    )
+                                }
                             />
                         </div>
                         <div className="flex items-center gap-2">
@@ -1109,7 +1195,7 @@ export default function AdminProducts({
                 }}
             />
 
-            {isAdmin && (
+            {(isAdmin || stockOpen || externalOpen) && (
                 <>
                     <Dialog
                         open={!!editProduct}
@@ -1179,7 +1265,7 @@ export default function AdminProducts({
                                     </label>
                                     <Input
                                         type="number"
-                                        step="0.01"
+                                        step="1"
                                         min="0"
                                         value={editForm.data.price}
                                         onChange={(e) =>
@@ -1196,11 +1282,35 @@ export default function AdminProducts({
                                         </p>
                                     )}
                                 </div>
+                                <div className="space-y-1.5">
+                                    <label className="text-xs font-medium text-muted-foreground">
+                                        Stock/original price
+                                    </label>
+                                    <Input
+                                        type="number"
+                                        min="0"
+                                        step="1"
+                                        value={editForm.data.cost_price}
+                                        onChange={(e) =>
+                                            editForm.setData(
+                                                'cost_price',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                    {editForm.errors.cost_price && (
+                                        <p className="text-xs text-destructive">
+                                            {editForm.errors.cost_price}
+                                        </p>
+                                    )}
+                                </div>
                                 <DialogFooter className="sm:justify-between">
                                     <Button
                                         type="button"
                                         variant="destructive"
-                                        onClick={() => setDeleteConfirmOpen(true)}
+                                        onClick={() =>
+                                            setDeleteConfirmOpen(true)
+                                        }
                                         disabled={editForm.processing}
                                     >
                                         <Trash2Icon className="size-4" />
@@ -1260,6 +1370,293 @@ export default function AdminProducts({
                             </AlertDialogFooter>
                         </AlertDialogContent>
                     </AlertDialog>
+
+                    <Dialog
+                        open={externalOpen}
+                        onOpenChange={(open) => {
+                            setExternalOpen(open);
+
+                            if (!open) {
+                                setExternalCart([]);
+                                setExternalError(null);
+                            }
+                        }}
+                    >
+                        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+                            <DialogHeader>
+                                <DialogTitle>External use</DialogTitle>
+                                <DialogDescription>
+                                    Record products taken by an owner or
+                                    employee. This deducts stock but creates no
+                                    sale.
+                                </DialogDescription>
+                            </DialogHeader>
+                            {externalError && (
+                                <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
+                                    {externalError}
+                                </p>
+                            )}
+                            <Select
+                                value={externalUser}
+                                onValueChange={setExternalUser}
+                            >
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select person" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {users.map((user) => (
+                                        <SelectItem
+                                            key={user.id}
+                                            value={String(user.id)}
+                                        >
+                                            {user.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                                {activeProducts.map((product) => (
+                                    <Button
+                                        key={product.id}
+                                        type="button"
+                                        variant="outline"
+                                        onClick={() =>
+                                            setExternalCart((items) =>
+                                                items.some(
+                                                    (i) =>
+                                                        i.productId ===
+                                                        product.id,
+                                                )
+                                                    ? items
+                                                    : [
+                                                          ...items,
+                                                          {
+                                                              productId:
+                                                                  product.id,
+                                                              name: product.name,
+                                                              quantity: '1',
+                                                          },
+                                                      ],
+                                            )
+                                        }
+                                    >
+                                        {product.name} ({product.stock_quantity}
+                                        )
+                                    </Button>
+                                ))}
+                            </div>
+                            <div className="space-y-2">
+                                {externalCart.map((item) => (
+                                    <div
+                                        key={item.productId}
+                                        className="flex items-center justify-between gap-3"
+                                    >
+                                        <span>{item.name}</span>
+                                        <div className="flex items-center gap-2">
+                                            <Input
+                                                className="w-24"
+                                                type="text"
+                                                inputMode="numeric"
+                                                value={item.quantity}
+                                                onChange={(e) =>
+                                                    setExternalCart((items) =>
+                                                        items.map((i) =>
+                                                            i.productId ===
+                                                            item.productId
+                                                                ? {
+                                                                      ...i,
+                                                                      quantity:
+                                                                          e.target.value.replace(
+                                                                              /[^0-9]/g,
+                                                                              '',
+                                                                          ),
+                                                                  }
+                                                                : i,
+                                                        ),
+                                                    )
+                                                }
+                                            />
+                                            <Button
+                                                type="button"
+                                                size="icon"
+                                                variant="ghost"
+                                                aria-label={`Remove ${item.name}`}
+                                                onClick={() =>
+                                                    setExternalCart((items) =>
+                                                        items.filter(
+                                                            (i) =>
+                                                                i.productId !==
+                                                                item.productId,
+                                                        ),
+                                                    )
+                                                }
+                                            >
+                                                <X className="size-4" />
+                                            </Button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                            <DialogFooter>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={() => setExternalCart([])}
+                                >
+                                    Clear
+                                </Button>
+                                <Button
+                                    type="button"
+                                    disabled={
+                                        !externalUser ||
+                                        externalCart.length === 0 ||
+                                        externalCart.some(
+                                            (item) =>
+                                                item.quantity.trim() === '' ||
+                                                Number(item.quantity) < 1,
+                                        )
+                                    }
+                                    onClick={() => {
+                                        setExternalError(null);
+                                        router.post(
+                                            '/admin/products/external-use',
+                                            {
+                                                user_id: Number(externalUser),
+                                                items: externalCart.map(
+                                                    (item) => ({
+                                                        product_id:
+                                                            item.productId,
+                                                        quantity: Number(
+                                                            item.quantity,
+                                                        ),
+                                                    }),
+                                                ),
+                                            },
+                                            {
+                                                onSuccess: () => {
+                                                    setExternalOpen(false);
+                                                    setExternalCart([]);
+                                                },
+                                                onError: (errors) =>
+                                                    setExternalError(
+                                                        errors.inventory ||
+                                                            'Could not record external use.',
+                                                    ),
+                                            },
+                                        );
+                                    }}
+                                >
+                                    Record use
+                                </Button>
+                            </DialogFooter>
+                        </DialogContent>
+                    </Dialog>
+
+                    <Dialog
+                        open={stockOpen}
+                        onOpenChange={(open) => {
+                            setStockOpen(open);
+
+                            if (!open) {
+                                setStockCart([]);
+                                setStockError(null);
+                            }
+                        }}
+                    >
+                        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+                            <DialogHeader>
+                                <DialogTitle>Update stock</DialogTitle>
+                                <DialogDescription>
+                                    Select products and enter an adjustment.
+                                    Positive values add stock; negative values
+                                    are available to admins only.
+                                </DialogDescription>
+                            </DialogHeader>
+                            {stockError && (
+                                <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
+                                    {stockError}
+                                </p>
+                            )}
+                            <div className="grid gap-2 sm:grid-cols-2">
+                                {activeProducts.map((product) => (
+                                    <Button
+                                        key={product.id}
+                                        type="button"
+                                        variant="outline"
+                                        className="h-auto justify-between py-3 text-left"
+                                        onClick={() => addStockProduct(product)}
+                                    >
+                                        <span>{product.name}</span>
+                                        <span className="text-xs text-muted-foreground">
+                                            Current: {product.stock_quantity}
+                                        </span>
+                                    </Button>
+                                ))}
+                            </div>
+                            <div className="space-y-2 rounded-lg border p-3">
+                                {stockCart.length === 0 && (
+                                    <p className="text-sm text-muted-foreground">
+                                        No products selected.
+                                    </p>
+                                )}
+                                {stockCart.map((item) => (
+                                    <div
+                                        key={item.productId}
+                                        className="flex items-center justify-between gap-3"
+                                    >
+                                        <span className="text-sm font-medium">
+                                            {item.name}
+                                        </span>
+                                        <Input
+                                            type="text"
+                                            inputMode="numeric"
+                                            value={item.quantity}
+                                            onChange={(event) =>
+                                                setStockCart((items) =>
+                                                    items.map((line) =>
+                                                        line.productId ===
+                                                        item.productId
+                                                            ? {
+                                                                  ...line,
+                                                                  quantity:
+                                                                      event.target.value
+                                                                          .replace(
+                                                                              /[^0-9-]/g,
+                                                                              '',
+                                                                          )
+                                                                          .replace(
+                                                                              /(?!^)-/g,
+                                                                              '',
+                                                                          ),
+                                                              }
+                                                            : line,
+                                                    ),
+                                                )
+                                            }
+                                            className="w-28"
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                            <DialogFooter>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={() => setStockCart([])}
+                                    disabled={stockCart.length === 0}
+                                >
+                                    Clear
+                                </Button>
+                                <Button
+                                    type="button"
+                                    onClick={submitStock}
+                                    disabled={stockCart.length === 0}
+                                >
+                                    Save stock
+                                </Button>
+                            </DialogFooter>
+                        </DialogContent>
+                    </Dialog>
 
                     <Dialog
                         open={createOpen}
@@ -1371,7 +1768,7 @@ export default function AdminProducts({
                                     </label>
                                     <Input
                                         type="number"
-                                        step="0.01"
+                                        step="1"
                                         min="0"
                                         value={data.price}
                                         onChange={(e) =>
@@ -1384,6 +1781,69 @@ export default function AdminProducts({
                                             {errors.price}
                                         </p>
                                     )}
+                                </div>
+                                <div className="space-y-1.5">
+                                    <label className="text-xs font-medium text-muted-foreground">
+                                        Stock/original price
+                                    </label>
+                                    <Input
+                                        type="number"
+                                        min="0"
+                                        step="1"
+                                        value={data.cost_price}
+                                        onChange={(e) =>
+                                            setData(
+                                                'cost_price',
+                                                e.target.value,
+                                            )
+                                        }
+                                    />
+                                    {errors.cost_price && (
+                                        <p className="text-xs text-destructive">
+                                            {errors.cost_price}
+                                        </p>
+                                    )}
+                                </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="space-y-1.5">
+                                        <label className="text-xs font-medium text-muted-foreground">
+                                            Starting stock
+                                        </label>
+                                        <Input
+                                            type="number"
+                                            min="0"
+                                            step="1"
+                                            value={data.stock_quantity}
+                                            onChange={(e) =>
+                                                setData(
+                                                    'stock_quantity',
+                                                    e.target.value,
+                                                )
+                                            }
+                                        />
+                                        {errors.stock_quantity && (
+                                            <p className="text-xs text-destructive">
+                                                {errors.stock_quantity}
+                                            </p>
+                                        )}
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-xs font-medium text-muted-foreground">
+                                            Low-stock alert at
+                                        </label>
+                                        <Input
+                                            type="number"
+                                            min="0"
+                                            step="1"
+                                            value={data.low_stock_threshold}
+                                            onChange={(e) =>
+                                                setData(
+                                                    'low_stock_threshold',
+                                                    e.target.value,
+                                                )
+                                            }
+                                        />
+                                    </div>
                                 </div>
                                 <DialogFooter>
                                     <Button

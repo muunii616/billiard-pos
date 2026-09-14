@@ -36,10 +36,13 @@ final class PaymentPayload
     /**
      * Normalize and validate payment rows against a grand total.
      *
+     * Cash may overpay so change can be returned; card/transfer cannot exceed the total.
+     * When $allowOverpay is true, cash overpayment is reduced to the retained amount.
+     *
      * @param  array<int, array<string, mixed>>  $payments
      * @return array{payments: array<int, array{method: string, amount: float}>, error: null|string}
      */
-    public static function normalizeForTotal(array $payments, float $grandTotal, bool $allowOverpay): array
+    public static function normalizeForTotal(array $payments, float $grandTotal, bool $allowOverpay = true): array
     {
         $validMethods = self::methods();
 
@@ -85,7 +88,18 @@ final class PaymentPayload
             return ['payments' => $validPayments, 'error' => 'card_transfer_exceeds'];
         }
 
-        return ['payments' => $validPayments, 'error' => null];
+        // Record money retained by the business, excluding cash handed back as change.
+        $change = $allowOverpay ? round(max(0, $totalPaid - $grandTotal), 2) : 0;
+        foreach ($validPayments as &$payment) {
+            if ($payment['method'] === 'cash' && $change > 0) {
+                $returned = min($payment['amount'], $change);
+                $payment['amount'] = round($payment['amount'] - $returned, 2);
+                $change = round($change - $returned, 2);
+            }
+        }
+        unset($payment);
+
+        return ['payments' => array_values(array_filter($validPayments, fn ($payment) => $payment['amount'] > 0)), 'error' => null];
     }
 
     /**

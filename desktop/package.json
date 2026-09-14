@@ -1,0 +1,59 @@
+{
+  "name": "lox-billiard-pos",
+  "productName": "Lox Billiard POS",
+  "version": "1.0.3",
+  "description": "Local desktop POS for Lox Billiard",
+  "author": "Lox Billiard",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "package": "electron-builder --win nsis --x64 --publish never",
+    "test": "node --test tests/*.test.cjs"
+  },
+  "devDependencies": {
+    "electron": "44.2.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "mn.lox.billiardpos",
+    "electronDist": "node_modules/electron/dist",
+    "asar": true,
+    "files": [
+      "main.cjs",
+      "runtime.cjs",
+      "watchdog.cjs",
+      "package.json",
+      "splash.html",
+      "icon.png"
+    ],
+    "extraResources": [
+      {
+        "from": ".build/payload",
+        "to": "payload"
+      },
+      {
+        "from": "bridge.php",
+        "to": "bridge.php"
+      },
+      {
+        "from": "README.md",
+        "to": "DESKTOP-README.md"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "icon.png",
+      "artifactName": "Lox-Billiard-POS-Setup-${version}.${ext}",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "deleteAppDataOnUninstall": false,
+      "include": "installer.nsh"
+    }
+  }
+}

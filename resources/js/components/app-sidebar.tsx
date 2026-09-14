@@ -1,6 +1,5 @@
 import { Link, usePage } from '@inertiajs/react';
 import { BarChart3, LayoutGrid, Table2, Users, Wallet } from 'lucide-react';
-import { NavFooter } from '@/components/nav-footer';
 import { NavMain } from '@/components/nav-main';
 import { NavUser } from '@/components/nav-user';
 import {
@@ -39,11 +38,11 @@ const mainNavItems: NavItem[] = [
     },
 ];
 
-const footerNavItems: NavItem[] = [];
-
 export function AppSidebar() {
     const page = usePage();
-    const isAdmin = (page.props as any)?.auth?.user?.role === 'admin';
+    const isAdmin =
+        (page.props as { auth?: { user?: { role?: string } } })?.auth?.user
+            ?.role === 'admin';
 
     const navItems: NavItem[] = [
         ...mainNavItems,
@@ -85,7 +84,7 @@ export function AppSidebar() {
                             >
                                 <div className="flex aspect-square size-12 shrink-0 items-center justify-center overflow-hidden rounded-md">
                                     <img
-                                        src="/logo.png"
+                                        src="/logo-ui.png"
                                         alt="Lox Billiard"
                                         className="h-full w-full object-contain"
                                     />
@@ -106,7 +105,6 @@ export function AppSidebar() {
             </SidebarContent>
 
             <SidebarFooter>
-                <NavFooter items={footerNavItems} className="mt-auto" />
                 <NavUser />
             </SidebarFooter>
         </Sidebar>

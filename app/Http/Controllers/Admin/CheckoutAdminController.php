@@ -4,9 +4,10 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\CheckoutSession;
-use App\Models\CheckoutSessionItem;
-use App\Models\Product;
-use App\Support\PosItemUpserter;
+use App\Models\Receipt;
+use App\Support\InventoryService;
+use App\Support\PosItemEditor;
+use App\Support\PosTransaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -14,99 +15,66 @@ class CheckoutAdminController extends Controller
 {
     public function updateItems(Request $request, CheckoutSession $checkout)
     {
-        if (! $checkout->isOpen()) {
-            return response()->json(['message' => 'Only open tabs can be edited.'], 422);
-        }
-
-        $data = $request->validate([
-            'items' => ['required', 'array'],
-            'items.*.id' => ['nullable', 'integer'],
-            'items.*.product_id' => ['nullable', 'integer', 'exists:products,id'],
-            'items.*.product_name' => ['nullable', 'string', 'max:255'],
-            'items.*.product_category' => ['nullable', 'string', 'max:255'],
-            'items.*.unit_price' => ['nullable', 'numeric', 'min:0'],
-            'items.*.quantity' => ['required', 'integer', 'min:0'],
-        ]);
-
-        DB::transaction(function () use ($checkout, $data) {
-            foreach ($data['items'] as $row) {
-                $qty = (int) $row['quantity'];
-                $id = $row['id'] ?? null;
-
-                if ($id) {
-                    /** @var CheckoutSessionItem $item */
-                    $item = CheckoutSessionItem::where('checkout_session_id', $checkout->id)->findOrFail($id);
-                    if ($qty <= 0) {
-                        $item->delete();
-                        continue;
-                    }
-                    $item->quantity = $qty;
-                    $item->total_price = round($item->quantity * (float) $item->unit_price, 2);
-                    $item->save();
-                    continue;
-                }
-
-                if (! empty($row['product_id'])) {
-                    $product = Product::findOrFail((int) $row['product_id']);
-                    PosItemUpserter::upsertCheckoutProduct($checkout, $product, $qty, increment: false);
-                    continue;
-                }
-
-                if ($qty <= 0) {
-                    continue;
-                }
-
-                $name = (string) ($row['product_name'] ?? '');
-                $category = (string) ($row['product_category'] ?? '');
-                $unitPrice = (float) ($row['unit_price'] ?? 0);
-                if (trim($name) === '') {
-                    continue;
-                }
-                PosItemUpserter::createCheckoutManualItem($checkout, $name, $category, $qty, $unitPrice);
+        return PosTransaction::checkout($checkout, function (CheckoutSession $checkout) use ($request) {
+            if (! $checkout->isOpen()) {
+                return response()->json(['message' => 'Only open tabs can be edited.'], 422);
             }
-        });
 
-        return response()->json(['message' => 'Tab items updated.']);
+            $data = $request->validate(PosItemEditor::rules());
+            PosItemEditor::update($checkout, $data['items']);
+
+            return response()->json(['message' => 'Tab items updated.']);
+        });
     }
 
-    public function void(CheckoutSession $checkout)
+    public function void(Request $request, CheckoutSession $checkout)
     {
-        if (! $checkout->isOpen()) {
-            return response()->json(['message' => 'This tab is not open.'], 422);
-        }
+        return PosTransaction::checkout($checkout, function (CheckoutSession $checkout) use ($request) {
+            if (! $checkout->isOpen()) {
+                return response()->json(['message' => 'This tab is not open.'], 422);
+            }
 
-        $checkout->update([
-            'status' => 'voided',
-            'completed_at' => now(),
-        ]);
+            $isAdmin = $request->user()?->role === 'admin';
+            $data = $request->validate([
+                'reason' => [$isAdmin ? 'nullable' : 'required', 'string', 'max:2000'],
+            ]);
+            $reason = trim((string) ($data['reason'] ?? ''));
 
-        return response()->json(['message' => 'Tab voided.']);
+            DB::transaction(function () use ($checkout, $request, $reason) {
+                $checkout->load(['items', 'gameSessions.items']);
+                InventoryService::restore($checkout->items);
+                foreach ($checkout->gameSessions as $session) {
+                    InventoryService::restore($session->items);
+                }
+                $checkout->update([
+                    'status' => 'voided',
+                    'completed_at' => now('UTC'),
+                    'void_reason' => $reason !== '' ? $reason : null,
+                    'voided_by_user_id' => $request->user()?->id,
+                ]);
+            });
+
+            return response()->json(['message' => 'Tab voided.']);
+        });
     }
 
     public function reopen(CheckoutSession $checkout)
     {
-        if (! in_array($checkout->status, ['completed', 'voided', 'merged'], true)) {
-            return response()->json(['message' => 'Only completed/voided/merged tabs can be reopened.'], 422);
-        }
-
-        $checkout->load(['items', 'gameSessions.items']);
-
-        $new = CheckoutSession::create(['status' => CheckoutSession::STATUS_OPEN]);
-
-        DB::transaction(function () use ($checkout, $new) {
-            foreach ($checkout->items as $item) {
-                $new->items()->create([
-                    'product_id' => $item->product_id,
-                    'product_name' => $item->product_name,
-                    'product_category' => $item->product_category,
-                    'quantity' => $item->quantity,
-                    'unit_price' => $item->unit_price,
-                    'total_price' => $item->total_price,
-                ]);
+        return PosTransaction::checkout($checkout, function (CheckoutSession $checkout) {
+            if (! in_array($checkout->status, ['completed', 'voided'], true)) {
+                return response()->json(['message' => 'Only completed or voided tabs can be reopened.'], 422);
             }
-        });
+            $checkout->load(['items', 'gameSessions.items']);
+            if ($checkout->status === 'voided') {
+                InventoryService::deduct($checkout->items->concat($checkout->gameSessions->flatMap->items));
+            }
+            Receipt::query()->where('checkout_session_id', $checkout->id)
+                ->where('status', '!=', 'voided')->lockForUpdate()->get()->each->update([
+                    'status' => 'voided', 'voided_at' => now('UTC'), 'void_reason' => 'Tab reopened for correction.',
+                ]);
+            $checkout->update(['status' => CheckoutSession::STATUS_OPEN, 'completed_at' => null]);
 
-        return response()->json(['message' => 'Tab reopened.', 'checkout_id' => $new->id]);
+            return response()->json(['message' => 'Tab reopened.', 'checkout_id' => $checkout->id]);
+        });
     }
 }
-

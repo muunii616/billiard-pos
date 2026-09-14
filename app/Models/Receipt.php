@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -29,6 +30,11 @@ class Receipt extends Model
         'paid_at' => 'datetime',
         'voided_at' => 'datetime',
     ];
+
+    public function scopePaid(Builder $query): Builder
+    {
+        return $query->where('status', 'paid')->whereNotNull('paid_at');
+    }
 
     public function session()
     {

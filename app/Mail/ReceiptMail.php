@@ -3,10 +3,10 @@
 namespace App\Mail;
 
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\SerializesModels;
 
 class ReceiptMail extends Mailable implements ShouldQueue
@@ -26,7 +26,7 @@ class ReceiptMail extends Mailable implements ShouldQueue
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Your receipt ' . $this->receiptNumber,
+            subject: 'Your receipt '.$this->receiptNumber,
         );
     }
 

@@ -2,7 +2,9 @@ import { Head, Link, usePage } from '@inertiajs/react';
 import { dashboard, login } from '@/routes';
 
 export default function Welcome() {
-    const { auth } = usePage().props as { auth?: { user?: Record<string, unknown> | null } };
+    const { auth } = usePage().props as {
+        auth?: { user?: Record<string, unknown> | null };
+    };
 
     return (
         <>
@@ -14,9 +16,12 @@ export default function Welcome() {
                 />
             </Head>
             <div className="flex min-h-svh flex-col items-center justify-center bg-gradient-to-br from-emerald-950/95 via-slate-900 to-slate-900 p-6 sm:p-8">
-                <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_0%,rgba(16,185,129,0.12),transparent)]" aria-hidden />
+                <div
+                    className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_0%,rgba(16,185,129,0.12),transparent)]"
+                    aria-hidden
+                />
                 {auth?.user && (
-                    <header className="absolute top-0 left-0 right-0 flex justify-end p-4 sm:p-6">
+                    <header className="absolute top-0 right-0 left-0 flex justify-end p-4 sm:p-6">
                         <Link
                             href={dashboard()}
                             className="rounded-lg border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm transition hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent"
@@ -38,7 +43,8 @@ export default function Welcome() {
                         Billiard POS
                     </h1>
                     <p className="mt-3 max-w-sm text-base text-slate-300 sm:text-lg">
-                        Table management and point of sale for your billiard hall
+                        Table management and point of sale for your billiard
+                        hall
                     </p>
                     {!auth?.user && (
                         <div className="mt-10">

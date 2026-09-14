@@ -27,13 +27,13 @@
             <tr style="border-bottom: 1px solid #ddd;">
                 <td style="padding: 0.5rem;">{{ $item['description'] }}</td>
                 <td style="text-align: right; padding: 0.5rem;">{{ $item['quantity'] ?? 1 }}</td>
-                <td style="text-align: right; padding: 0.5rem;">{{ number_format($item['subtotal'], 2) }}</td>
+                <td style="text-align: right; padding: 0.5rem;">₮{{ number_format($item['subtotal'], 0) }}</td>
             </tr>
             @endforeach
         </tbody>
     </table>
 
-    <p style="margin-top: 1rem;"><strong>Grand total:</strong> {{ number_format($grandTotal, 2) }}</p>
+    <p style="margin-top: 1rem;"><strong>Grand total:</strong> ₮{{ number_format($grandTotal, 0) }}</p>
 
     <p style="margin-top: 2rem; color: #666; font-size: 0.9rem;">Thank you for your business.</p>
 </body>

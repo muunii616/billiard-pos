@@ -2,7 +2,6 @@ import { createInertiaApp } from '@inertiajs/react';
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { registerSW } from 'virtual:pwa-register';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import '../css/app.css';
 import { initializeTheme } from '@/hooks/use-appearance';
@@ -34,6 +33,12 @@ createInertiaApp({
 
 initializeTheme();
 
-registerSW({
-    immediate: true,
-});
+if (import.meta.env.PROD) {
+    void import('virtual:pwa-register')
+        .then(({ registerSW }) => {
+            registerSW({ immediate: true });
+        })
+        .catch(() => {
+            // PWA register is optional; ignore if unavailable.
+        });
+}

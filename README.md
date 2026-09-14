@@ -4,12 +4,14 @@ Laravel + Vite (React/TypeScript) point-of-sale system for managing billiard tab
 
 ## Requirements
 
-- PHP 8.2+ and Composer
-- Node.js 18+ (npm)
+- PHP 8.4+ and Composer
+- Node.js 22.12+ (npm)
 - MySQL 8+ (or MariaDB)
 
 Optional (recommended):
 - Git
+
+All POS reports and displayed business dates use Asia/Ulaanbaatar; database timestamps remain UTC. Public registration is disabled. Administrators create staff accounts under Users.
 
 ## Quick start (local development)
 

@@ -107,6 +107,7 @@ export default [
     {
         ignores: [
             'vendor',
+            'desktop/**',
             'node_modules',
             'public',
             'bootstrap/ssr',

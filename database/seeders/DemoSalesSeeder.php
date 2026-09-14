@@ -10,6 +10,7 @@ use App\Models\Receipt;
 use App\Models\ReceiptPayment;
 use App\Models\SessionItem;
 use App\Models\User;
+use App\Support\TableTimeBilling;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -53,7 +54,7 @@ class DemoSalesSeeder extends Seeder
 
             foreach ($this->salesDates() as $index => $paidAt) {
                 $minutes = 40 + (($index * 13) % 81);
-                $timeTotal = round($minutes * 0.20, 2);
+                $timeTotal = TableTimeBilling::totalForSeconds($minutes * 60);
                 $table = $tables[$index % $tables->count()];
 
                 $session = GameSession::query()->create([

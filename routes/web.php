@@ -14,18 +14,18 @@ use App\Http\Controllers\ReceiptController;
 use App\Http\Controllers\RegisterController;
 use App\Http\Controllers\TableController;
 use Illuminate\Support\Facades\Route;
-use Laravel\Fortify\Features;
 
-Route::inertia('/', 'welcome', [
-    'canRegister' => Features::enabled(Features::registration()),
-])->name('home');
+Route::inertia('/', 'welcome')->name('home');
 
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('dashboard', DashboardController::class)->name('dashboard');
 
     Route::get('overview', OverviewController::class)->name('overview');
+    Route::get('overview/download', [OverviewController::class, 'download'])->name('overview.download');
     Route::get('cash-register', RegisterController::class)->name('cash-register.index');
     Route::get('admin/products', [AdminProductController::class, 'index'])->name('admin.products.index');
+    Route::post('admin/products/stock', [AdminProductController::class, 'adjustStock'])->name('admin.products.stock');
+    Route::post('admin/products/external-use', [AdminProductController::class, 'recordExternalUse'])->name('admin.products.external-use');
 
     Route::get('tables', [TableController::class, 'index'])->name('tables.index');
     Route::post('tables/{table}/start', [TableController::class, 'start'])->name('tables.start');
@@ -36,6 +36,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('tables/{table}/move-to-checkout', [TableController::class, 'moveToCheckout'])->name('tables.move-to-checkout');
     Route::post('tables/{table}/items', [TableController::class, 'addItem'])->name('tables.items.add');
     Route::post('tables/{table}/items/bulk', [TableController::class, 'addItemsBulk'])->name('tables.items.bulk');
+    Route::post('tables/{table}/cancel-session', [TableAdminController::class, 'cancelSession'])->name('tables.cancel-session');
     Route::get('checkouts', [CheckoutSessionController::class, 'index'])->name('checkouts.index');
     Route::get('checkouts/options', [CheckoutSessionController::class, 'options'])->name('checkouts.options');
     Route::post('checkouts/from-products', [CheckoutSessionController::class, 'createFromProducts'])->name('checkouts.from-products');
@@ -44,7 +45,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('checkouts/{checkout}/items/bulk', [CheckoutSessionController::class, 'addItemsBulk'])->name('checkouts.items.bulk');
     Route::post('checkouts/{checkout}/complete', [CheckoutSessionController::class, 'complete'])->name('checkouts.complete');
     Route::post('checkouts/merge', [CheckoutSessionController::class, 'merge'])->name('checkouts.merge');
+    Route::post('admin/checkouts/{checkout}/void', [CheckoutAdminController::class, 'void'])->name('admin.checkouts.void');
     Route::post('receipts/{receipt}/send-email', [ReceiptController::class, 'sendEmail'])->name('receipts.send-email');
+    Route::get('admin/receipts/{receipt}', [ReceiptAdminController::class, 'show'])->name('admin.receipts.show');
     Route::get('admin/cash/current', [CashSessionAdminController::class, 'current'])->name('admin.cash.current');
     Route::post('admin/cash/open', [CashSessionAdminController::class, 'open'])->name('admin.cash.open');
     Route::post('admin/cash/close', [CashSessionAdminController::class, 'close'])->name('admin.cash.close');
@@ -56,7 +59,6 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::put('admin/products/{product}', [AdminProductController::class, 'update'])->name('admin.products.update');
         Route::delete('admin/products/{product}', [AdminProductController::class, 'destroy'])->name('admin.products.destroy');
 
-        Route::get('admin/tables', [BilliardTableController::class, 'index'])->name('admin.tables.index');
         Route::post('admin/tables', [BilliardTableController::class, 'store'])->name('admin.tables.store');
         Route::put('admin/tables/{table}', [BilliardTableController::class, 'update'])->name('admin.tables.update');
         Route::delete('admin/tables/{table}', [BilliardTableController::class, 'destroy'])->name('admin.tables.destroy');
@@ -68,16 +70,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
         // Admin actions on existing pages
         Route::put('admin/checkouts/{checkout}/items', [CheckoutAdminController::class, 'updateItems'])->name('admin.checkouts.items.update');
-        Route::post('admin/checkouts/{checkout}/void', [CheckoutAdminController::class, 'void'])->name('admin.checkouts.void');
         Route::post('admin/checkouts/{checkout}/reopen', [CheckoutAdminController::class, 'reopen'])->name('admin.checkouts.reopen');
 
-        Route::get('admin/receipts/{receipt}', [ReceiptAdminController::class, 'show'])->name('admin.receipts.show');
         Route::put('admin/receipts/{receipt}', [ReceiptAdminController::class, 'update'])->name('admin.receipts.update');
         Route::post('admin/receipts/{receipt}/void', [ReceiptAdminController::class, 'void'])->name('admin.receipts.void');
         Route::delete('admin/receipts/{receipt}', [ReceiptAdminController::class, 'destroy'])->name('admin.receipts.destroy');
         Route::get('admin/overview/export/csv', [ReceiptAdminController::class, 'exportCsv'])->name('admin.overview.export.csv');
 
-        Route::post('admin/tables/{table}/cancel-session', [TableAdminController::class, 'cancelSession'])->name('admin.tables.cancel-session');
         Route::put('admin/tables/{table}/session-items', [TableAdminController::class, 'updateSessionItems'])->name('admin.tables.session-items.update');
         Route::post('admin/tables/{table}/maintenance', [TableAdminController::class, 'setMaintenance'])->name('admin.tables.maintenance');
 

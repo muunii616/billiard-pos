@@ -2,7 +2,7 @@ import { Head, Link, router } from '@inertiajs/react';
 import { Wallet } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import AppLayout from '@/layouts/app-layout';
-import { formatMoney } from '@/lib/payments';
+import { formatMoney, roundToNearestIncrement } from '@/lib/payments';
 import { dashboard } from '@/routes';
 import tablesRoutes from '@/routes/tables';
 import type { BreadcrumbItem } from '@/types';
@@ -46,6 +46,7 @@ type RunningSession = {
 type Props = {
     today: TodayStats;
     rate_per_minute: number;
+    rounding_increment: number;
     tables: TableRow[];
     running_sessions: RunningSession[];
     isAdmin: boolean;
@@ -55,7 +56,8 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Dashboard', href: dashboard.url() },
 ];
 
-const RATE_PER_MINUTE = 0.20;
+const RATE_PER_MINUTE = 20000 / 60;
+const ROUNDING_INCREMENT = 500;
 
 function formatElapsed(seconds: number): string {
     const s = Math.max(0, Math.floor(seconds));
@@ -71,17 +73,31 @@ function formatDuration(seconds: number): string {
     const m = Math.floor(seconds / 60);
 
     if (m >= 60) {
-return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
+        return `${Math.floor(m / 60)}h ${m % 60}m`;
+    }
 
     return `${m}m`;
 }
 
-export default function Dashboard({ today, rate_per_minute, tables, running_sessions }: Props) {
+export default function Dashboard({
+    today,
+    rate_per_minute,
+    rounding_increment,
+    tables,
+    running_sessions,
+}: Props) {
     const [now, setNow] = useState(() => Date.now());
 
     useEffect(() => {
-        router.reload({ only: ['today', 'tables', 'running_sessions', 'rate_per_minute'] });
+        router.reload({
+            only: [
+                'today',
+                'tables',
+                'running_sessions',
+                'rate_per_minute',
+                'rounding_increment',
+            ],
+        });
     }, []);
 
     useEffect(() => {
@@ -90,78 +106,103 @@ export default function Dashboard({ today, rate_per_minute, tables, running_sess
         return () => clearInterval(id);
     }, []);
 
-    const getLiveElapsedSeconds = useCallback((row: TableRow): number | null => {
-        if (row.elapsed_seconds == null) {
-return null;
-}
+    const getLiveElapsedSeconds = useCallback(
+        (row: TableRow): number | null => {
+            if (row.elapsed_seconds == null) {
+                return null;
+            }
 
-        if (row.session_status === 'paused') {
-return row.elapsed_seconds;
-}
+            if (row.session_status === 'paused') {
+                return row.elapsed_seconds;
+            }
 
-        if (!row.last_resume_at) {
-return row.elapsed_seconds;
-}
+            if (!row.last_resume_at) {
+                return row.elapsed_seconds;
+            }
 
-        const resumeMs = new Date(row.last_resume_at).getTime();
+            const resumeMs = new Date(row.last_resume_at).getTime();
 
-        return row.elapsed_seconds + Math.max(0, Math.floor((now - resumeMs) / 1000));
-    }, [now]);
+            return (
+                row.elapsed_seconds +
+                Math.max(0, Math.floor((now - resumeMs) / 1000))
+            );
+        },
+        [now],
+    );
 
-    const getLiveBill = useCallback((row: TableRow): number | null => {
-        const sec = getLiveElapsedSeconds(row);
+    const getLiveBill = useCallback(
+        (row: TableRow): number | null => {
+            const sec = getLiveElapsedSeconds(row);
 
-        if (sec == null) {
-return null;
-}
+            if (sec == null) {
+                return null;
+            }
 
-        const timeTotal = Math.round((sec / 60) * (rate_per_minute ?? RATE_PER_MINUTE) * 100) / 100;
+            const rawTimeTotal =
+                (sec / 60) * (rate_per_minute ?? RATE_PER_MINUTE);
+            const timeTotal = roundToNearestIncrement(
+                rawTimeTotal,
+                rounding_increment ?? ROUNDING_INCREMENT,
+            );
 
-        return Math.round((timeTotal + (row.items_total ?? 0)) * 100) / 100;
-    }, [getLiveElapsedSeconds, rate_per_minute]);
+            return Math.round((timeTotal + (row.items_total ?? 0)) * 100) / 100;
+        },
+        [getLiveElapsedSeconds, rate_per_minute, rounding_increment],
+    );
 
-    const getRunningSessionLive = useCallback((s: RunningSession) => {
-        let sec = s.elapsed_seconds;
+    const getRunningSessionLive = useCallback(
+        (s: RunningSession) => {
+            let sec = s.elapsed_seconds;
 
-        if (s.session_status === 'running' && s.last_resume_at) {
-            const resumeMs = new Date(s.last_resume_at).getTime();
-            sec = s.elapsed_seconds + Math.max(0, Math.floor((now - resumeMs) / 1000));
-        }
+            if (s.session_status === 'running' && s.last_resume_at) {
+                const resumeMs = new Date(s.last_resume_at).getTime();
+                sec =
+                    s.elapsed_seconds +
+                    Math.max(0, Math.floor((now - resumeMs) / 1000));
+            }
 
-        const timeTotal = Math.round((sec / 60) * (rate_per_minute ?? RATE_PER_MINUTE) * 100) / 100;
-        const bill = Math.round((timeTotal + (s.items_total ?? 0)) * 100) / 100;
+            const rawTimeTotal =
+                (sec / 60) * (rate_per_minute ?? RATE_PER_MINUTE);
+            const timeTotal = roundToNearestIncrement(
+                rawTimeTotal,
+                rounding_increment ?? ROUNDING_INCREMENT,
+            );
+            const bill =
+                Math.round((timeTotal + (s.items_total ?? 0)) * 100) / 100;
 
-        return { duration: formatDuration(sec), bill };
-    }, [now, rate_per_minute]);
+            return { duration: formatDuration(sec), bill };
+        },
+        [now, rate_per_minute, rounding_increment],
+    );
 
     const statusLabel = (table: TableRow) => {
         if (table.status === 'maintenance') {
-return 'Maintenance';
-}
+            return 'Maintenance';
+        }
 
         if (table.session_status === 'paused') {
-return 'Paused';
-}
+            return 'Paused';
+        }
 
         if (table.session_status === 'running') {
-return 'In Play';
-}
+            return 'In Play';
+        }
 
         return 'Available';
     };
 
     const statusDot = (table: TableRow) => {
         if (table.status === 'maintenance') {
-return 'bg-red-500';
-}
+            return 'bg-red-500';
+        }
 
         if (table.session_status === 'paused') {
-return 'bg-amber-500';
-}
+            return 'bg-amber-500';
+        }
 
         if (table.session_status === 'running') {
-return 'bg-emerald-500';
-}
+            return 'bg-emerald-500';
+        }
 
         return 'bg-slate-400';
     };
@@ -176,18 +217,28 @@ return 'bg-emerald-500';
                     </h2>
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                         <div className="rounded-xl border border-sidebar-border/70 bg-card p-4 shadow-sm dark:border-sidebar-border">
-                            <p className="text-xs font-medium text-muted-foreground">Revenue</p>
+                            <p className="text-xs font-medium text-muted-foreground">
+                                Revenue
+                            </p>
                             <div className="mt-2 space-y-1 text-sm">
                                 <div className="flex justify-between">
-                                    <span className="text-muted-foreground">Table time</span>
-                                    <span className="tabular-nums font-medium">
-                                        {formatMoney(Number(today.revenue_time) || 0)}
+                                    <span className="text-muted-foreground">
+                                        Table time
+                                    </span>
+                                    <span className="font-medium tabular-nums">
+                                        {formatMoney(
+                                            Number(today.revenue_time) || 0,
+                                        )}
                                     </span>
                                 </div>
                                 <div className="flex justify-between">
-                                    <span className="text-muted-foreground">Food & drinks</span>
-                                    <span className="tabular-nums font-medium">
-                                        {formatMoney(Number(today.revenue_products) || 0)}
+                                    <span className="text-muted-foreground">
+                                        Food & drinks
+                                    </span>
+                                    <span className="font-medium tabular-nums">
+                                        {formatMoney(
+                                            Number(today.revenue_products) || 0,
+                                        )}
                                     </span>
                                 </div>
                             </div>
@@ -196,13 +247,17 @@ return 'bg-emerald-500';
                             </p>
                         </div>
                         <div className="rounded-xl border border-sidebar-border/70 bg-card p-4 shadow-sm dark:border-sidebar-border">
-                            <p className="text-xs font-medium text-muted-foreground">Sessions</p>
+                            <p className="text-xs font-medium text-muted-foreground">
+                                Sessions
+                            </p>
                             <p className="mt-1 text-2xl font-semibold tabular-nums">
                                 {today.sessions_count ?? 0}
                             </p>
                         </div>
                         <div className="rounded-xl border border-sidebar-border/70 bg-card p-4 shadow-sm dark:border-sidebar-border">
-                            <p className="text-xs font-medium text-muted-foreground">Tables in use</p>
+                            <p className="text-xs font-medium text-muted-foreground">
+                                Tables in use
+                            </p>
                             <p className="mt-1 text-2xl font-semibold tabular-nums">
                                 {today.tables_in_use ?? 0}
                                 <span className="ml-1 text-base font-normal text-muted-foreground">
@@ -221,7 +276,9 @@ return 'bg-emerald-500';
                             <p className="mt-1 text-2xl font-semibold tabular-nums">
                                 {today.open_tabs_count ?? 0}
                             </p>
-                            <p className="mt-0.5 text-xs text-muted-foreground">unpaid tabs</p>
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                                unpaid tabs
+                            </p>
                         </Link>
                     </div>
                 </section>
@@ -233,7 +290,8 @@ return 'bg-emerald-500';
                     <div className="rounded-xl border border-sidebar-border/70 bg-card dark:border-sidebar-border">
                         <ul className="divide-y divide-sidebar-border/70">
                             {tables.map((table) => {
-                                const liveElapsed = getLiveElapsedSeconds(table);
+                                const liveElapsed =
+                                    getLiveElapsedSeconds(table);
                                 const liveBill = getLiveBill(table);
 
                                 return (
@@ -247,21 +305,31 @@ return 'bg-emerald-500';
                                                     className={`h-3 w-3 shrink-0 rounded-full ${statusDot(table)}`}
                                                     aria-hidden
                                                 />
-                                                <span className="font-medium">{table.name}</span>
+                                                <span className="font-medium">
+                                                    {table.name}
+                                                </span>
                                                 <span className="text-sm text-muted-foreground">
                                                     {statusLabel(table)}
                                                 </span>
                                             </div>
-                                            {(table.session_status === 'running' || table.session_status === 'paused') && liveElapsed != null && (
-                                                <span className="tabular-nums text-muted-foreground">
-                                                    {formatElapsed(liveElapsed)}
-                                                    {liveBill != null && (
-                                                        <span className="ml-2 font-medium text-foreground">
-                                                            {formatMoney(liveBill)}
-                                                        </span>
-                                                    )}
-                                                </span>
-                                            )}
+                                            {(table.session_status ===
+                                                'running' ||
+                                                table.session_status ===
+                                                    'paused') &&
+                                                liveElapsed != null && (
+                                                    <span className="text-muted-foreground tabular-nums">
+                                                        {formatElapsed(
+                                                            liveElapsed,
+                                                        )}
+                                                        {liveBill != null && (
+                                                            <span className="ml-2 font-medium text-foreground">
+                                                                {formatMoney(
+                                                                    liveBill,
+                                                                )}
+                                                            </span>
+                                                        )}
+                                                    </span>
+                                                )}
                                         </Link>
                                     </li>
                                 );
@@ -283,10 +351,18 @@ return 'bg-emerald-500';
                             <table className="w-full text-sm">
                                 <thead>
                                     <tr className="border-b border-sidebar-border/70 bg-muted/50">
-                                        <th className="px-4 py-3 text-left font-medium">Table</th>
-                                        <th className="px-4 py-3 text-left font-medium">Start time</th>
-                                        <th className="px-4 py-3 text-left font-medium">Duration</th>
-                                        <th className="px-4 py-3 text-right font-medium">Current bill</th>
+                                        <th className="px-4 py-3 text-left font-medium">
+                                            Table
+                                        </th>
+                                        <th className="px-4 py-3 text-left font-medium">
+                                            Start time
+                                        </th>
+                                        <th className="px-4 py-3 text-left font-medium">
+                                            Duration
+                                        </th>
+                                        <th className="px-4 py-3 text-right font-medium">
+                                            Current bill
+                                        </th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -294,7 +370,10 @@ return 'bg-emerald-500';
                                         const live = getRunningSessionLive(s);
 
                                         return (
-                                            <tr key={s.table_id} className="border-b border-sidebar-border/50 last:border-0">
+                                            <tr
+                                                key={s.table_id}
+                                                className="border-b border-sidebar-border/50 last:border-0"
+                                            >
                                                 <td className="px-4 py-3">
                                                     <Link
                                                         href={tablesRoutes.index.url()}
@@ -303,9 +382,13 @@ return 'bg-emerald-500';
                                                         {s.table_name}
                                                     </Link>
                                                 </td>
-                                                <td className="px-4 py-3 text-muted-foreground">{s.started_at ?? '—'}</td>
-                                                <td className="px-4 py-3 tabular-nums">{live.duration}</td>
-                                                <td className="px-4 py-3 text-right tabular-nums font-medium">
+                                                <td className="px-4 py-3 text-muted-foreground">
+                                                    {s.started_at ?? '—'}
+                                                </td>
+                                                <td className="px-4 py-3 tabular-nums">
+                                                    {live.duration}
+                                                </td>
+                                                <td className="px-4 py-3 text-right font-medium tabular-nums">
                                                     {formatMoney(live.bill)}
                                                 </td>
                                             </tr>

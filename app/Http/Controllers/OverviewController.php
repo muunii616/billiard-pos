@@ -4,62 +4,62 @@ namespace App\Http\Controllers;
 
 use App\Models\GameSession;
 use App\Models\Receipt;
-use App\Models\ReceiptPayment;
+use App\Support\PosDate;
+use App\Support\ProductCategory;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class OverviewController extends Controller
 {
-    private function normalizeCategory(?string $category): string
+    public function download(Request $request)
     {
-        $key = strtolower(trim((string) $category));
+        $data = $request->validate([
+            'period' => ['required', 'in:daily,range,monthly'],
+            'date' => ['required_if:period,daily', 'date_format:Y-m-d'],
+            'from' => ['required_if:period,range', 'date_format:Y-m-d'],
+            'to' => ['required_if:period,range', 'date_format:Y-m-d', 'after_or_equal:from'],
+            'month' => ['required_if:period,monthly', 'date_format:Y-m'],
+        ]);
+        [$start, $end] = PosDate::reportRange($request, 'period');
+        $timezone = PosDate::timezone();
+        $receipts = Receipt::with('payments')
+            ->where('status', 'paid')
+            ->whereBetween('paid_at', [$start->copy()->utc(), $end->copy()->utc()])
+            ->orderBy('paid_at')->get();
+        $payments = $receipts->flatMap->payments->groupBy('method')
+            ->map(fn ($items) => $items->sum('amount'));
 
-        return match ($key) {
-            'drink', 'drinks' => 'Drinks',
-            'snack', 'snacks' => 'Snacks',
-            'set', 'sets', 'combo', 'combos' => 'Sets',
-            default => 'Other',
-        };
+        return Pdf::loadView('pdf.overview', [
+            'receipts' => $receipts, 'payments' => $payments,
+            'start' => $start, 'end' => $end, 'timezone' => $timezone,
+            'period' => $data['period'],
+        ])->setPaper('a4')->download('overview-'.$start->format('Y-m-d').'-'.$end->format('Y-m-d').'.pdf');
     }
 
     public function __invoke(Request $request): Response
     {
         $isAdmin = $request->user()?->role === 'admin';
-        $mode = $request->query('mode', 'daily'); // daily or monthly
-        $dateInput = (string) $request->query('date', now()->toDateString());
-        try {
-            $dailyDate = Carbon::createFromFormat('Y-m-d', $dateInput)->toDateString();
-        } catch (\Throwable $e) {
-            $dailyDate = now()->toDateString();
-        }
+        [$localStart, $localEnd, $mode, $date, $month] = PosDate::reportRange($request);
+        $start = $localStart->utc();
+        $end = $localEnd->utc();
 
-        if ($mode === 'monthly') {
-            $month = $request->query('month', now()->format('Y-m'));
-            $start = Carbon::createFromFormat('Y-m', $month)->startOfMonth();
-            $endOfMonth = (clone $start)->endOfMonth();
-            $end = $start->isSameMonth(now()) ? now() : $endOfMonth;
-            $date = $dailyDate; // preserve user's last daily date while browsing monthly view
-        } else {
-            $date = $dailyDate;
-            $start = Carbon::createFromFormat('Y-m-d', $date)->startOfDay();
-            $end = (clone $start)->endOfDay();
-            $month = $start->format('Y-m');
-        }
-
-        $receipts = Receipt::with([
-            'payments',
-            'session.items',
-            'checkoutSession.items',
-            'checkoutSession.gameSessions.items',
-        ])
+        $receipts = Receipt::with(['payments', 'lineItems'])
             ->whereBetween('paid_at', [$start, $end])
-            ->whereNull('deleted_at')
-            ->where('status', '!=', 'voided')
+            ->paid()
             ->orderByDesc('paid_at')
             ->get();
+
+        if ($receipts->contains(fn (Receipt $receipt) => $receipt->lineItems->isEmpty())) {
+            $receipts->load([
+                'session.items',
+                'checkoutSession.items',
+                'checkoutSession.gameSessions.items',
+            ]);
+        }
+
         $totalRevenue = $receipts->sum('grand_total');
         $receiptsCount = $receipts->count();
 
@@ -67,13 +67,23 @@ class OverviewController extends Controller
             ->whereBetween('ended_at', [$start, $end])
             ->count();
 
-        $payments = ReceiptPayment::whereHas('receipt', function ($query) use ($start, $end) {
-            $query->whereBetween('paid_at', [$start, $end]);
-        })
-            ->selectRaw('method, SUM(amount) as total')
-            ->groupBy('method')
-            ->pluck('total', 'method')
-            ->toArray();
+        $cancelledSessions = GameSession::with(['table', 'cancelledBy'])
+            ->where('status', 'cancelled')
+            ->whereBetween('ended_at', [$start, $end])
+            ->orderByDesc('ended_at')
+            ->get()
+            ->map(fn (GameSession $session) => [
+                'id' => $session->id,
+                'table_name' => $session->table->name ?? 'Table',
+                'cancelled_at' => $session->ended_at?->toIso8601String(),
+                'cancelled_by' => $session->cancelledBy?->name ?? 'Unknown',
+                'reason' => $session->cancel_reason,
+            ])
+            ->values()
+            ->all();
+
+        $payments = $receipts->flatMap->payments->groupBy('method')
+            ->map(fn ($rows) => (float) $rows->sum('amount'))->all();
 
         $sales = [
             'Table time' => round((float) $receipts->sum('time_total'), 2),
@@ -84,21 +94,34 @@ class OverviewController extends Controller
         ];
 
         foreach ($receipts as $receipt) {
+            if ($receipt->lineItems->isNotEmpty()) {
+                $originalItems = collect($receipt->session?->items ?? [])
+                    ->concat($receipt->checkoutSession?->items ?? [])
+                    ->concat($receipt->checkoutSession?->gameSessions->flatMap->items ?? []);
+                $legacyCategories = $originalItems->groupBy('product_name')->map(fn ($items) => $items->pluck('product_category')->filter()->unique()->count() === 1 ? $items->first()->product_category : null
+                );
+                foreach ($receipt->lineItems->whereIn('type', ['product', 'adjustment']) as $item) {
+                    $category = ProductCategory::normalize($item->meta['product_category'] ?? $legacyCategories[$item->description] ?? null);
+                    $sales[$category] = round(($sales[$category] ?? 0) + (float) $item->subtotal, 2);
+                }
+
+                continue;
+            }
             if ($receipt->session) {
                 foreach ($receipt->session->items as $item) {
-                    $category = $this->normalizeCategory($item->product_category ?? $item->product?->category);
+                    $category = ProductCategory::normalize($item->product_category ?? $item->product?->category);
                     $sales[$category] = round(($sales[$category] ?? 0) + (float) $item->total_price, 2);
                 }
             }
 
             if ($receipt->checkoutSession) {
                 foreach ($receipt->checkoutSession->items as $item) {
-                    $category = $this->normalizeCategory($item->product_category ?? $item->product?->category);
+                    $category = ProductCategory::normalize($item->product_category ?? $item->product?->category);
                     $sales[$category] = round(($sales[$category] ?? 0) + (float) $item->total_price, 2);
                 }
                 foreach ($receipt->checkoutSession->gameSessions as $session) {
                     foreach ($session->items as $item) {
-                        $category = $this->normalizeCategory($item->product_category ?? $item->product?->category);
+                        $category = ProductCategory::normalize($item->product_category ?? $item->product?->category);
                         $sales[$category] = round(($sales[$category] ?? 0) + (float) $item->total_price, 2);
                     }
                 }
@@ -111,18 +134,19 @@ class OverviewController extends Controller
             $chartPayments[$label] = round((float) $amount, 2);
         }
 
-        $selectedYear = (int) Carbon::createFromFormat('Y-m', $month)->year;
-        $monthIncomeMap = Receipt::query()
-            ->whereYear('paid_at', $selectedYear)
-            ->selectRaw('MONTH(paid_at) as month_no, SUM(grand_total) as total')
-            ->groupBy('month_no')
-            ->pluck('total', 'month_no');
-        $monthlyIncome = collect(range(1, 12))->map(function (int $m) use ($monthIncomeMap) {
-            return [
-                'month' => Carbon::create()->month($m)->format('M'),
-                'income' => round((float) ($monthIncomeMap[$m] ?? 0), 2),
-            ];
-        })->all();
+        $selectedYear = (int) substr($month, 0, 4);
+        $yearStart = PosDate::month($selectedYear.'-01');
+        $incomeQuery = Receipt::paid()->whereBetween('paid_at', [$yearStart->utc(), $yearStart->endOfYear()->utc()]);
+        for ($m = 1; $m <= 12; $m++) {
+            $monthStart = $yearStart->addMonths($m - 1);
+            $incomeQuery->selectRaw('COALESCE(SUM(CASE WHEN paid_at >= ? AND paid_at < ? THEN grand_total ELSE 0 END), 0) as month_'.$m,
+                [$monthStart->utc(), $monthStart->addMonth()->utc()]);
+        }
+        $income = $incomeQuery->first();
+        $monthlyIncome = collect(range(1, 12))->map(fn (int $m) => [
+            'month' => $yearStart->addMonths($m - 1)->format('M'),
+            'income' => round((float) $income->{'month_'.$m}, 2),
+        ])->all();
 
         $invoices = $receipts
             ->map(function (Receipt $receipt) {
@@ -140,6 +164,7 @@ class OverviewController extends Controller
                     'status' => $receipt->paid_at ? 'Paid' : 'Unpaid',
                     'method' => empty($methods) ? '—' : implode(', ', $methods),
                     'amount' => (float) $receipt->grand_total,
+                    'paid_at' => $receipt->paid_at?->toIso8601String(),
                 ];
             })
             ->values()
@@ -162,6 +187,7 @@ class OverviewController extends Controller
                 'monthly_income' => $monthlyIncome,
             ],
             'invoices' => $invoices,
+            'cancelled_sessions' => $cancelledSessions,
             'selected_year' => $selectedYear,
         ]);
     }

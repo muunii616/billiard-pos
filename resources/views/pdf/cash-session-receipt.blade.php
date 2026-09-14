@@ -69,9 +69,10 @@
 </head>
 <body>
     @php
-        $money = fn ($value) => '$' . number_format((float) $value, 2);
-        $openedAt = $session->opened_at ? $session->opened_at->format('Y-m-d h:i A') : '-';
-        $closedAt = $session->closed_at ? $session->closed_at->format('Y-m-d h:i A') : '-';
+        $money = fn ($value) => number_format((float) $value, 0) . ' MNT';
+        $displayTimezone = config('app.display_timezone');
+        $openedAt = $session->opened_at ? $session->opened_at->copy()->setTimezone($displayTimezone)->format('Y-m-d h:i A') : '-';
+        $closedAt = $session->closed_at ? $session->closed_at->copy()->setTimezone($displayTimezone)->format('Y-m-d h:i A') : '-';
     @endphp
 
     <div class="header">
@@ -106,6 +107,80 @@
                 <td class="label">Closed By</td>
                 <td class="value">{{ $session->closedBy?->name ?? '-' }}</td>
             </tr>
+        </table>
+    </div>
+
+    <div class="section">
+        <div class="section-title">Billiard Table Revenue</div>
+        <table>
+            <tr>
+                <td class="label">Total table time charges</td>
+                <td class="value">{{ $money($tableTimeTotal) }}</td>
+            </tr>
+        </table>
+    </div>
+
+    <div class="section">
+        <div class="section-title">Products Sold</div>
+        @if($productSales->isEmpty())
+            <div class="muted">No products sold during this shift.</div>
+        @else
+            <table>
+                <tr><th style="text-align:left">Product</th><th style="text-align:right">Qty</th><th style="text-align:right">Total</th></tr>
+                @foreach($productSales as $product)
+                    <tr>
+                        <td>{{ $product['description'] }}</td>
+                        <td class="value">{{ rtrim(rtrim(number_format((float) $product['quantity'], 2), '0'), '.') }}</td>
+                        <td class="value">{{ $money($product['total']) }}</td>
+                    </tr>
+                @endforeach
+            </table>
+        @endif
+    </div>
+
+    <div class="section">
+        <div class="section-title">External Use (Not Sales)</div>
+        @if($externalUsages->isEmpty())
+            <div class="muted">No external product usage during this shift.</div>
+        @else
+            <table>
+                <tr><th style="text-align:left">Person</th><th style="text-align:left">Product</th><th style="text-align:right">Qty</th><th style="text-align:right">Original price</th><th style="text-align:right">Total cost</th></tr>
+                @foreach($externalUsages as $usage)
+                    <tr>
+                        <td>{{ $usage->user?->name ?? '-' }}</td>
+                        <td>{{ $usage->product?->name ?? 'Deleted product' }}</td>
+                        <td class="value">{{ $usage->quantity }}</td>
+                        <td class="value">{{ $money($usage->unit_cost) }}</td>
+                        <td class="value">{{ $money($usage->total_cost) }}</td>
+                    </tr>
+                @endforeach
+            </table>
+            <div class="separator"></div>
+            <table><tr><td class="label">Total external-use cost</td><td class="value">{{ $money($externalUsages->sum('total_cost')) }}</td></tr></table>
+        @endif
+    </div>
+
+    <div class="section">
+        <div class="section-title">Stock Adjustments</div>
+        @if($stockAdjustments->isEmpty())
+            <div class="muted">No stock adjustments during this shift.</div>
+        @else
+            <table>
+                <tr><th style="text-align:left">User</th><th style="text-align:left">Product</th><th style="text-align:right">Change</th><th style="text-align:right">Stock after</th></tr>
+                @foreach($stockAdjustments as $adjustment)
+                    <tr><td>{{ $adjustment->user?->name ?? '-' }}</td><td>{{ $adjustment->product?->name ?? 'Deleted product' }}</td><td class="value">{{ $adjustment->quantity_change > 0 ? '+' : '' }}{{ $adjustment->quantity_change }}</td><td class="value">{{ $adjustment->stock_after }}</td></tr>
+                @endforeach
+            </table>
+        @endif
+    </div>
+
+    <div class="section">
+        <div class="section-title">Stock Reconciliation</div>
+        <table>
+            <tr><th style="text-align:left">Product</th><th style="text-align:right">Opening</th><th style="text-align:right">Adjusted</th><th style="text-align:right">Sold</th><th style="text-align:right">External</th><th style="text-align:right">Expected</th><th style="text-align:right">Closing</th></tr>
+            @foreach($stockReport as $stock)
+                <tr><td>{{ $stock['product'] }}</td><td class="value">{{ $stock['opening'] }}</td><td class="value">{{ $stock['adjusted'] > 0 ? '+' : '' }}{{ $stock['adjusted'] }}</td><td class="value">{{ $stock['sold'] }}</td><td class="value">{{ $stock['external'] }}</td><td class="value">{{ $stock['expected'] }}</td><td class="value">{{ $stock['closing'] }}</td></tr>
+            @endforeach
         </table>
     </div>
 
