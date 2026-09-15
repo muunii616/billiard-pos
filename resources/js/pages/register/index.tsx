@@ -1,5 +1,8 @@
 import { Head } from '@inertiajs/react';
+import { Download } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { PageHeader } from '@/components/page-header';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -15,7 +18,6 @@ import AppLayout from '@/layouts/app-layout';
 import { formatDateTime } from '@/lib/dates';
 import { jsonHeaders } from '@/lib/http';
 import { formatMoney } from '@/lib/payments';
-import type { BreadcrumbItem } from '@/types';
 
 type CashSessionInfo = {
     id: number;
@@ -41,10 +43,6 @@ type HistoryResponse = {
     last_page: number;
     total: number;
 };
-
-const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Register', href: '/cash-register' },
-];
 
 export default function RegisterPage() {
     const money = formatMoney;
@@ -217,9 +215,13 @@ export default function RegisterPage() {
     };
 
     return (
-        <AppLayout breadcrumbs={breadcrumbs}>
+        <AppLayout breadcrumbs={[]}>
             <Head title="Register" />
             <div className="flex flex-1 flex-col gap-4 rounded-xl p-4">
+                <PageHeader
+                    title="Register"
+                    description="Open the shift, count cash, and download reports."
+                />
                 <Card className="border-sidebar-border/70 bg-background py-4 dark:border-sidebar-border">
                     <CardHeader className="px-4 pb-2">
                         <CardTitle className="text-sm font-semibold">
@@ -258,7 +260,7 @@ export default function RegisterPage() {
                                     onClick={handleOpenShift}
                                     disabled={actionLoading}
                                 >
-                                    {actionLoading ? 'Opening…' : 'Open Shift'}
+                                    {actionLoading ? 'Opening…' : 'Open shift'}
                                 </Button>
                             </div>
                         )}
@@ -270,7 +272,7 @@ export default function RegisterPage() {
                                         <span className="text-muted-foreground">
                                             Status:
                                         </span>{' '}
-                                        Open
+                                        <Badge>Open</Badge>
                                     </div>
                                     <div>
                                         <span className="text-muted-foreground">
@@ -375,7 +377,7 @@ export default function RegisterPage() {
                                     onClick={handleCloseShift}
                                     disabled={actionLoading}
                                 >
-                                    {actionLoading ? 'Closing…' : 'Close Shift'}
+                                    {actionLoading ? 'Closing…' : 'Close shift'}
                                 </Button>
                             </div>
                         )}
@@ -449,16 +451,20 @@ export default function RegisterPage() {
                                             {money(shift.total_sales)}
                                         </span>
                                         <Button
-                                            size="sm"
+                                            size="icon"
                                             variant="outline"
                                             asChild
+                                            title="Download report"
                                         >
                                             <a
                                                 href={`/admin/cash/${shift.id}/receipt`}
                                                 target="_blank"
                                                 rel="noreferrer"
                                             >
-                                                Download report
+                                                <Download className="h-4 w-4" />
+                                                <span className="sr-only">
+                                                    Download report
+                                                </span>
                                             </a>
                                         </Button>
                                     </div>

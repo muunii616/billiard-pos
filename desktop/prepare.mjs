@@ -85,6 +85,10 @@ await Promise.all(Object.entries(lock).map(async ([name, item]) => {
 }));
 
 const stage = path.join(payload, 'app');
+// Unlink the build junction before clearing, so the project's node_modules is never followed.
+try { await fs.unlink(path.join(stage, 'node_modules')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+// Stage from empty: a reused directory would ship files that no longer exist in the project.
+await fs.rm(stage, {recursive: true, force: true});
 await fs.mkdir(stage, {recursive: true});
 for (const name of ['app','bootstrap','config','database','public','resources','routes','vendor','artisan','composer.json','composer.lock','package.json','package-lock.json','vite.config.ts','tsconfig.json']) {
   await fs.cp(path.join(root, name), path.join(stage, name), {recursive: true,

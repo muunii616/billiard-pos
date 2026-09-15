@@ -7,7 +7,6 @@ use App\Models\CheckoutSession;
 use App\Models\GameSession;
 use App\Models\Receipt;
 use App\Support\PosDate;
-use App\Support\TableTimeBilling;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -54,9 +53,9 @@ class DashboardController extends Controller
             if ($inPlay) {
                 $playedSeconds = $session->playedSeconds($now);
                 $elapsedFormatted = gmdate('H:i:s', $playedSeconds);
-                $timeTotal = TableTimeBilling::totalForSeconds($playedSeconds);
                 $itemsTotal = (float) $session->items->sum('total_price');
-                $currentBill = round(max(0, $timeTotal + $itemsTotal), 2);
+                // Table time is billed manually in blocks at checkout — no live ₮ estimate.
+                $currentBill = $itemsTotal > 0 ? round($itemsTotal, 2) : null;
                 $startedAt = $session->started_at?->copy()->setTimezone($appTz)->format('g:i A');
                 $minutes = (int) floor($playedSeconds / 60);
                 $durationFormatted = $minutes >= 60
@@ -110,8 +109,6 @@ class DashboardController extends Controller
                 'tables_total' => $tablesTotal,
                 'open_tabs_count' => $openTabsCount,
             ],
-            'rate_per_minute' => TableTimeBilling::ratePerMinute(),
-            'rounding_increment' => TableTimeBilling::roundingIncrement(),
             'tables' => $tables,
             'running_sessions' => $runningSessions,
             'isAdmin' => $isAdmin,

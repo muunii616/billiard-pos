@@ -8,10 +8,14 @@ import {
     Pencil,
     Plus,
     CheckCircle2Icon,
+    Timer,
 } from 'lucide-react';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import InvoiceDialog from '@/components/invoice-dialog';
 import type { InvoiceReceipt } from '@/components/invoice-dialog';
+import { PageHeader } from '@/components/page-header';
+import PaymentForm from '@/components/payment-form';
+import { TimeBlockPicker } from '@/components/time-block-picker';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
     AlertDialog,
@@ -25,6 +29,7 @@ import {
     AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
     Dialog,
     DialogContent,
@@ -43,19 +48,25 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import AppLayout from '@/layouts/app-layout';
-import { normalizeCategory } from '@/lib/categories';
+import { categoryBadgeClass, normalizeCategory } from '@/lib/categories';
 import { inertiaPost } from '@/lib/inertia-action';
 import { jsonHeaders } from '@/lib/http';
 import {
     buildExactSettlementPayments,
-    clampNonCashInput,
     formatMoney,
-    paymentPreview,
     roundMoney,
 } from '@/lib/payments';
+import { posCartRowClass, posPanelClass, posTileClass } from '@/lib/pos-ui';
+import {
+    DEFAULT_TIME_BLOCKS,
+    emptyBlockCounts,
+    playAlertBeep,
+    totalForBlockCounts,
+    type TimeBlock,
+    type TimeBlockCounts,
+} from '@/lib/time-blocks';
 import receiptsRoutes from '@/routes/receipts';
 import tablesRoutes from '@/routes/tables';
-import type { BreadcrumbItem } from '@/types';
 
 type SessionItem = {
     id: number;
@@ -74,6 +85,8 @@ type TableSession = {
     last_resume_at: string | null;
     ended_at: string | null;
     time_total: string;
+    alert_at_played_seconds?: number | null;
+    has_alert?: boolean;
     items: SessionItem[];
 };
 
@@ -94,24 +107,20 @@ type Props = {
         stock_quantity: number;
         low_stock_threshold: number;
     }[];
+    timeBlocks?: TimeBlock[];
     receipt?: InvoiceReceipt | null;
     isAdmin?: boolean;
 };
-
-const breadcrumbs: BreadcrumbItem[] = [
-    {
-        title: 'Tables',
-        href: '/tables',
-    },
-];
 
 type CheckoutSummary = {
     table_id: number;
     table_name: string;
     session_id: number;
+    played_seconds?: number;
     time_total: number;
     items_total: number;
     grand_total: number;
+    time_blocks?: TimeBlock[];
 };
 
 function formatElapsedSeconds(seconds: number): string {
@@ -127,9 +136,14 @@ function formatElapsedSeconds(seconds: number): string {
 export default function TablesIndex({
     tables,
     products,
+    timeBlocks: timeBlocksProp,
     receipt: receiptProp,
     isAdmin = false,
 }: Props) {
+    const catalogBlocks =
+        timeBlocksProp && timeBlocksProp.length > 0
+            ? timeBlocksProp
+            : DEFAULT_TIME_BLOCKS;
     const [checkoutOpen, setCheckoutOpen] = useState(false);
     const [checkoutLoading, setCheckoutLoading] = useState(false);
     const [checkoutSummary, setCheckoutSummary] =
@@ -185,6 +199,7 @@ export default function TablesIndex({
         null,
     );
     const [cancelSessionReason, setCancelSessionReason] = useState('');
+    const [cancelSessionRestock, setCancelSessionRestock] = useState(true);
     const [editSessionItemsOpen, setEditSessionItemsOpen] = useState(false);
     const [editSessionTableId, setEditSessionTableId] = useState<number | null>(
         null,
@@ -220,28 +235,57 @@ export default function TablesIndex({
         null,
     );
     const [tabErrorMessage, setTabErrorMessage] = useState<string | null>(null);
+    const [checkoutBlockCounts, setCheckoutBlockCounts] = useState<TimeBlockCounts>(
+        () => emptyBlockCounts(catalogBlocks),
+    );
+    const [endChoiceBlockCounts, setEndChoiceBlockCounts] =
+        useState<TimeBlockCounts>(() => emptyBlockCounts(catalogBlocks));
+    const [alertDialogOpen, setAlertDialogOpen] = useState(false);
+    const [alertDialogTableId, setAlertDialogTableId] = useState<number | null>(
+        null,
+    );
+    const [alertDialogExtend, setAlertDialogExtend] = useState(false);
+    const [alertDraftCounts, setAlertDraftCounts] = useState<TimeBlockCounts>(
+        () => emptyBlockCounts(catalogBlocks),
+    );
+    const [alertSubmitting, setAlertSubmitting] = useState(false);
+    const [expiredAlertTableId, setExpiredAlertTableId] = useState<
+        number | null
+    >(null);
+    /** Tables where staff already chose Extend/End/Clear — stop beep/modal until alert is fixed. */
+    const [silencedExpiredTableIds, setSilencedExpiredTableIds] = useState<
+        number[]
+    >([]);
+    const alertAudioRef = useRef<AudioContext | null>(null);
+    /** Bumped on table lifecycle POSTs so a slow poll cannot overwrite fresh state. */
+    const tableSyncEpochRef = useRef(0);
+    const alertClosedAfterSaveRef = useRef(false);
     const money = formatMoney;
-    const checkoutGrandTotalNum =
-        checkoutOpen && checkoutSummary
-            ? roundMoney(Number(checkoutSummary.grand_total))
-            : 0;
-    const checkoutCardNum = roundMoney(parseFloat(card) || 0);
-    const checkoutTransferNum = roundMoney(parseFloat(transfer) || 0);
-    const maxCardAmount =
-        checkoutOpen && checkoutSummary
-            ? Math.max(0, checkoutGrandTotalNum - checkoutTransferNum)
-            : 0;
-    const maxTransferAmount =
-        checkoutOpen && checkoutSummary
-            ? Math.max(0, checkoutGrandTotalNum - checkoutCardNum)
-            : 0;
+
+    const checkoutBlocks = checkoutSummary?.time_blocks?.length
+        ? checkoutSummary.time_blocks
+        : catalogBlocks;
+    const checkoutTimeTotal = totalForBlockCounts(
+        checkoutBlockCounts,
+        checkoutBlocks,
+    );
+    const checkoutGrandTotal = roundMoney(
+        checkoutTimeTotal + (Number(checkoutSummary?.items_total) || 0),
+    );
+    const endChoiceTimeTotal = totalForBlockCounts(
+        endChoiceBlockCounts,
+        catalogBlocks,
+    );
+    const endChoiceGrandTotal = roundMoney(
+        endChoiceTimeTotal + (Number(endChoiceSummary?.items_total) || 0),
+    );
 
     useEffect(() => {
         if (!checkoutOpen || !checkoutSummary) {
             return;
         }
 
-        const g = roundMoney(Number(checkoutSummary.grand_total));
+        const g = roundMoney(checkoutGrandTotal);
         const d = roundMoney(parseFloat(card) || 0);
         const t = roundMoney(parseFloat(transfer) || 0);
 
@@ -253,7 +297,7 @@ export default function TablesIndex({
         const newD = Math.min(d, Math.max(0, g - newT));
         setCard(newD === 0 ? '' : String(newD));
         setTransfer(newT === 0 ? '' : String(newT));
-    }, [card, checkoutOpen, checkoutSummary, transfer]);
+    }, [card, checkoutGrandTotal, checkoutOpen, checkoutSummary, transfer]);
 
     const pageErrors =
         (usePage().props as { errors?: Record<string, string> }).errors ?? {};
@@ -285,6 +329,13 @@ export default function TablesIndex({
                 return;
             }
 
+            // Avoid clobbering in-progress end/checkout Inertia visits.
+            if (endChoiceOpen || checkoutOpen || checkoutLoading) {
+                return;
+            }
+
+            const epochAtPollStart = tableSyncEpochRef.current;
+
             router.get(
                 '/tables',
                 {},
@@ -293,12 +344,25 @@ export default function TablesIndex({
                     preserveScroll: true,
                     replace: true,
                     only: ['tables'],
+                    onSuccess: () => {
+                        if (epochAtPollStart !== tableSyncEpochRef.current) {
+                            router.get(
+                                '/tables',
+                                {},
+                                {
+                                    preserveScroll: true,
+                                    replace: true,
+                                    only: ['tables'],
+                                },
+                            );
+                        }
+                    },
                 },
             );
         }, 2500);
 
         return () => window.clearInterval(intervalId);
-    }, []);
+    }, [checkoutLoading, checkoutOpen, endChoiceOpen]);
 
     useEffect(() => {
         const id = setInterval(() => setNow(Date.now()), 1000);
@@ -347,10 +411,34 @@ export default function TablesIndex({
         [now],
     );
 
+    const getAlertRemainingSeconds = useCallback(
+        (table: Table): number | null => {
+            const session = table.current_session;
+            if (!session?.has_alert || session.alert_at_played_seconds == null) {
+                return null;
+            }
+            const played = getElapsedSeconds(table) ?? 0;
+            return Math.max(0, session.alert_at_played_seconds - played);
+        },
+        [getElapsedSeconds],
+    );
+
     const getDisplayTime = useCallback(
         (table: Table): string => {
             if (table.id === checkoutTableId && frozenElapsedSeconds !== null) {
+                const target =
+                    table.current_session?.alert_at_played_seconds ?? null;
+                if (target != null) {
+                    return formatElapsedSeconds(
+                        Math.max(0, target - frozenElapsedSeconds),
+                    );
+                }
                 return formatElapsedSeconds(frozenElapsedSeconds);
+            }
+
+            const remaining = getAlertRemainingSeconds(table);
+            if (remaining !== null) {
+                return formatElapsedSeconds(remaining);
             }
 
             const sec = getElapsedSeconds(table);
@@ -359,14 +447,109 @@ export default function TablesIndex({
                 ? formatElapsedSeconds(sec)
                 : (table.current_session?.elapsed ?? '00:00:00');
         },
-        [checkoutTableId, frozenElapsedSeconds, getElapsedSeconds],
+        [
+            checkoutTableId,
+            frozenElapsedSeconds,
+            getAlertRemainingSeconds,
+            getElapsedSeconds,
+        ],
     );
+
+    const getTimerToneClass = useCallback(
+        (table: Table): string => {
+            const remaining = getAlertRemainingSeconds(table);
+            if (remaining === null) {
+                return 'text-emerald-400';
+            }
+            if (remaining <= 0) {
+                return 'text-rose-400';
+            }
+            if (remaining <= 60) {
+                return 'text-amber-300';
+            }
+            return 'text-sky-300';
+        },
+        [getAlertRemainingSeconds],
+    );
+
+    const expiredAlertTables = useMemo(
+        () =>
+            tables.filter((table) => {
+                if (silencedExpiredTableIds.includes(table.id)) {
+                    return false;
+                }
+                const remaining = getAlertRemainingSeconds(table);
+                return (
+                    table.current_session?.has_alert &&
+                    remaining !== null &&
+                    remaining <= 0
+                );
+            }),
+        [getAlertRemainingSeconds, silencedExpiredTableIds, tables],
+    );
+
+    const silenceExpiredAlarm = useCallback((tableId: number) => {
+        setSilencedExpiredTableIds((prev) =>
+            prev.includes(tableId) ? prev : [...prev, tableId],
+        );
+        setExpiredAlertTableId((current) =>
+            current === tableId ? null : current,
+        );
+    }, []);
+
+    const restoreExpiredAlarm = useCallback((tableId: number) => {
+        setSilencedExpiredTableIds((prev) =>
+            prev.filter((id) => id !== tableId),
+        );
+    }, []);
+
+    // Drop silence once the alert is cleared or has time remaining again.
+    useEffect(() => {
+        if (silencedExpiredTableIds.length === 0) {
+            return;
+        }
+
+        setSilencedExpiredTableIds((prev) => {
+            const next = prev.filter((id) => {
+                const table = tables.find((t) => t.id === id);
+                if (!table?.current_session?.has_alert) {
+                    return false;
+                }
+                const remaining = getAlertRemainingSeconds(table);
+                return remaining === null || remaining <= 0;
+            });
+
+            return next.length === prev.length ? prev : next;
+        });
+    }, [getAlertRemainingSeconds, silencedExpiredTableIds.length, tables]);
+
+    useEffect(() => {
+        if (expiredAlertTables.length === 0) {
+            setExpiredAlertTableId(null);
+            return;
+        }
+        const active =
+            expiredAlertTables.find((t) => t.id === expiredAlertTableId) ??
+            expiredAlertTables[0];
+        setExpiredAlertTableId(active.id);
+        alertAudioRef.current = playAlertBeep(alertAudioRef.current);
+        const id = window.setInterval(() => {
+            alertAudioRef.current = playAlertBeep(alertAudioRef.current);
+        }, 2500);
+        return () => window.clearInterval(id);
+    }, [expiredAlertTableId, expiredAlertTables]);
 
     useEffect(() => {
         if (checkoutOpen && pageErrors.payments) {
             setCheckoutError(pageErrors.payments);
         }
     }, [checkoutOpen, pageErrors.payments]);
+
+    useEffect(() => {
+        if (pageErrors.table) {
+            setTabErrorMessage(pageErrors.table);
+        }
+    }, [pageErrors.table]);
 
     const handleAction = (
         tableId: number,
@@ -389,17 +572,22 @@ export default function TablesIndex({
                     const t = tables.find((tbl) => tbl.id === data.table_id);
                     const wasRunning = t?.status === 'running';
 
-                    if (wasRunning) {
-                        setEndChoiceWasPaused(true);
-                        // Wait for pause so it cannot cancel the later move/pay visit.
-                        await inertiaPost(
-                            tablesRoutes.pause.url({ table: data.table_id }),
-                        );
-                    }
-
+                    // Open the end modal first. Pausing must preserve React state —
+                    // a full Inertia remount would drop endChoiceOpen and leave the
+                    // table looking merely paused.
+                    setEndChoiceWasPaused(wasRunning);
                     setEndChoiceTableId(data.table_id);
                     setEndChoiceSummary(data);
+                    setEndChoiceBlockCounts(emptyBlockCounts(catalogBlocks));
                     setEndChoiceOpen(true);
+
+                    if (wasRunning) {
+                        await inertiaPost(
+                            tablesRoutes.pause.url({ table: data.table_id }),
+                            {},
+                            { preserveState: true },
+                        );
+                    }
                 } catch {
                     setCheckoutError('Failed to load checkout summary.');
                 } finally {
@@ -410,8 +598,18 @@ export default function TablesIndex({
             return;
         }
 
+        tableSyncEpochRef.current += 1;
         const routeDef = tablesRoutes[action]({ table: tableId });
-        router.post(routeDef.url);
+        void inertiaPost(routeDef.url, {}, {
+            onError: () => {
+                router.reload({ preserveScroll: true });
+            },
+            onSuccess: () => {
+                if (action === 'start') {
+                    setActiveMobileTableId(tableId);
+                }
+            },
+        });
     };
 
     const closeEndChoice = () => {
@@ -427,8 +625,15 @@ export default function TablesIndex({
         setEndChoiceSummary(null);
         setEndChoiceWasPaused(false);
 
+        if (tableId != null) {
+            // Cancelling end with an expired alert should bring the alarm back.
+            restoreExpiredAlarm(tableId);
+        }
+
         if (wasPaused && tableId != null) {
-            router.post(tablesRoutes.resume.url({ table: tableId }));
+            router.post(tablesRoutes.resume.url({ table: tableId }), {}, {
+                preserveState: true,
+            });
         }
     };
 
@@ -470,6 +675,7 @@ export default function TablesIndex({
 
         setFrozenElapsedSeconds(sec);
         setCheckoutWasPaused(endChoiceWasPaused);
+        setCheckoutBlockCounts({ ...endChoiceBlockCounts });
         setCheckoutOpen(true);
         setShowExistingTabPicker(false);
         setExistingTabLoading(false);
@@ -504,7 +710,7 @@ export default function TablesIndex({
 
         const result = await inertiaPost(
             `/tables/${tableId}/move-to-checkout`,
-            {},
+            { time_blocks: endChoiceBlockCounts },
         );
         setMoveTabSubmitting(false);
 
@@ -585,7 +791,10 @@ export default function TablesIndex({
 
         const result = await inertiaPost(
             `/tables/${tableId}/move-to-checkout`,
-            { checkout_session_id: checkoutId },
+            {
+                checkout_session_id: checkoutId,
+                time_blocks: endChoiceBlockCounts,
+            },
         );
         setMoveTabSubmitting(false);
 
@@ -613,8 +822,15 @@ export default function TablesIndex({
         setFrozenElapsedSeconds(null);
         setCheckoutWasPaused(false);
 
+        // Only restore alarm when cancelling checkout. Successful pay keeps silence.
+        if (!skipResume && tableId != null) {
+            restoreExpiredAlarm(tableId);
+        }
+
         if (!skipResume && wasPaused && tableId != null) {
-            router.post(tablesRoutes.resume.url({ table: tableId }));
+            router.post(tablesRoutes.resume.url({ table: tableId }), {}, {
+                preserveState: true,
+            });
         }
     };
 
@@ -624,7 +840,7 @@ export default function TablesIndex({
         }
 
         const settlement = buildExactSettlementPayments({
-            expected: Number(checkoutSummary.grand_total) || 0,
+            expected: checkoutGrandTotal,
             cash: parseFloat(cash) || 0,
             card: parseFloat(card) || 0,
             transfer: parseFloat(transfer) || 0,
@@ -642,7 +858,11 @@ export default function TablesIndex({
         const payload: {
             payments: { method: string; amount: number }[];
             customer_email?: string;
-        } = { payments: settlement.payments };
+            time_blocks: TimeBlockCounts;
+        } = {
+            payments: settlement.payments,
+            time_blocks: checkoutBlockCounts,
+        };
 
         if (customerEmail.trim()) {
             payload.customer_email = customerEmail.trim();
@@ -666,6 +886,7 @@ export default function TablesIndex({
         setCancelSessionTableId(tableId);
         setCancelSessionError(null);
         setCancelSessionReason('');
+        setCancelSessionRestock(true);
         setCancelSessionOpen(true);
     };
 
@@ -693,6 +914,7 @@ export default function TablesIndex({
                     headers: jsonHeaders(),
                     body: JSON.stringify({
                         reason: cancelSessionReason.trim() || null,
+                        restock: cancelSessionRestock,
                     }),
                 },
             );
@@ -707,6 +929,7 @@ export default function TablesIndex({
             setCancelSessionOpen(false);
             setCancelSessionTableId(null);
             setCancelSessionReason('');
+            setCancelSessionRestock(true);
             router.reload();
         } catch (error) {
             setCancelSessionError(
@@ -1005,7 +1228,7 @@ export default function TablesIndex({
     };
 
     return (
-        <AppLayout breadcrumbs={breadcrumbs}>
+        <AppLayout breadcrumbs={[]}>
             <Head title="Tables" />
             <div className="flex flex-1 flex-col gap-6 rounded-xl p-4">
                 {tabSuccessMessage && (
@@ -1029,8 +1252,7 @@ export default function TablesIndex({
                         </Alert>
                     </div>
                 )}
-                <div className="flex items-center justify-between">
-                    <h1 className="text-xl font-semibold">Tables</h1>
+                <PageHeader title="Tables">
                     {isAdmin && (
                         <Button
                             onClick={() => setAddTableOpen(true)}
@@ -1041,7 +1263,7 @@ export default function TablesIndex({
                             Add table
                         </Button>
                     )}
-                </div>
+                </PageHeader>
 
                 <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
                     {tables.map((table) => {
@@ -1050,9 +1272,16 @@ export default function TablesIndex({
                             ['running', 'paused'].includes(
                                 table.current_session.status,
                             );
-                        const isAvailable = table.status === 'available';
-                        const isRunning = table.status === 'running';
-                        const isPaused = table.status === 'paused';
+                        // Prefer live session over table.status so ghost sessions
+                        // show Pause/End instead of a Start button that fails.
+                        const isAvailable =
+                            table.status === 'available' && !hasSession;
+                        const isRunning = hasSession
+                            ? table.current_session!.status === 'running'
+                            : table.status === 'running';
+                        const isPaused = hasSession
+                            ? table.current_session!.status === 'paused'
+                            : table.status === 'paused';
                         const isMaintenance = table.status === 'maintenance';
                         const showTimer = hasSession;
 
@@ -1100,9 +1329,13 @@ export default function TablesIndex({
                                         <div className="relative flex aspect-[1/1.85] min-h-[180px] w-full flex-col rounded-md bg-slate-700">
                                             <div className="flex flex-1 items-center justify-center px-2 pt-3">
                                                 {showTimer && (
-                                                    <span className="font-mono text-xl font-semibold text-emerald-400 tabular-nums">
-                                                        {getDisplayTime(table)}
-                                                    </span>
+                                                    <div className="flex flex-col items-center gap-1">
+                                                        <span
+                                                            className={`font-mono text-xl font-semibold tabular-nums ${getTimerToneClass(table)}`}
+                                                        >
+                                                            {getDisplayTime(table)}
+                                                        </span>
+                                                    </div>
                                                 )}
                                                 {!showTimer && (
                                                     <span className="text-sm text-slate-500">
@@ -1164,6 +1397,35 @@ export default function TablesIndex({
                                                         >
                                                             <ShoppingCart className="h-4 w-4" />
                                                             Add item
+                                                        </Button>
+                                                        <Button
+                                                            size="sm"
+                                                            variant="secondary"
+                                                            className="gap-1.5"
+                                                            onClick={() => {
+                                                                setAlertDialogTableId(
+                                                                    table.id,
+                                                                );
+                                                                setAlertDialogExtend(
+                                                                    !!table
+                                                                        .current_session
+                                                                        ?.has_alert,
+                                                                );
+                                                                setAlertDraftCounts(
+                                                                    emptyBlockCounts(
+                                                                        catalogBlocks,
+                                                                    ),
+                                                                );
+                                                                setAlertDialogOpen(
+                                                                    true,
+                                                                );
+                                                            }}
+                                                        >
+                                                            <Timer className="h-4 w-4" />
+                                                            {table.current_session
+                                                                ?.has_alert
+                                                                ? 'Extend'
+                                                                : 'Alert'}
                                                         </Button>
                                                         {isRunning ? (
                                                             <Button
@@ -1257,14 +1519,32 @@ export default function TablesIndex({
                                 {endChoiceSummary?.table_name ?? 'Table'}
                             </DialogTitle>
                             <DialogDescription>
-                                Grand total:{' '}
-                                {endChoiceSummary
-                                    ? money(endChoiceSummary.grand_total)
-                                    : money(0)}
-                                . Choose how to proceed.
+                                Played time is a hint only. Stack 1h / 30m / 15m
+                                blocks, then pay or move to a tab.
                             </DialogDescription>
                         </DialogHeader>
                         {endChoiceSummary && !showExistingTabPicker && (
+                            <>
+                                <TimeBlockPicker
+                                    blocks={catalogBlocks}
+                                    counts={endChoiceBlockCounts}
+                                    onChange={setEndChoiceBlockCounts}
+                                    playedLabel={
+                                        endChoiceSummary.played_seconds != null
+                                            ? formatElapsedSeconds(
+                                                  endChoiceSummary.played_seconds,
+                                              )
+                                            : null
+                                    }
+                                />
+                                <div className="flex justify-between text-sm font-semibold">
+                                    <span>Estimated total</span>
+                                    <span>{money(endChoiceGrandTotal)}</span>
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                    Items {money(endChoiceSummary.items_total)}{' '}
+                                    · Time {money(endChoiceTimeTotal)}
+                                </div>
                             <DialogFooter className="flex-col gap-2 sm:flex-row">
                                 <Button
                                     className="w-full sm:w-auto"
@@ -1293,6 +1573,7 @@ export default function TablesIndex({
                                     </Button>
                                 </div>
                             </DialogFooter>
+                            </>
                         )}
                         {endChoiceSummary && showExistingTabPicker && (
                             <div className="space-y-3">
@@ -1414,7 +1695,9 @@ export default function TablesIndex({
                         {detailsTable?.current_session && (
                             <div className="space-y-4">
                                 <div className="rounded-lg bg-slate-800/50 p-3 text-center">
-                                    <span className="font-mono text-2xl font-semibold text-emerald-400 tabular-nums">
+                                    <span
+                                        className={`font-mono text-2xl font-semibold tabular-nums ${getTimerToneClass(detailsTable)}`}
+                                    >
                                         {getDisplayTime(detailsTable)}
                                     </span>
                                 </div>
@@ -1630,7 +1913,7 @@ export default function TablesIndex({
                                     <Label className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                                         Categories
                                     </Label>
-                                    <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-2 lg:max-h-none lg:flex-1">
+                                    <div className={`max-h-40 space-y-1 overflow-y-auto ${posPanelClass} p-2 lg:max-h-none lg:flex-1`}>
                                         <Button
                                             type="button"
                                             size="sm"
@@ -1671,7 +1954,7 @@ export default function TablesIndex({
                                     <Label className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                                         Items
                                     </Label>
-                                    <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-3">
+                                    <div className={`min-h-0 flex-1 overflow-hidden ${posPanelClass} p-3`}>
                                         <div className="grid max-h-[34vh] grid-cols-1 content-start gap-3 overflow-y-auto text-sm sm:grid-cols-2 lg:h-full lg:max-h-none">
                                             {filteredProducts.length === 0 && (
                                                 <div className="col-span-2 px-2 py-1 text-muted-foreground">
@@ -1686,23 +1969,25 @@ export default function TablesIndex({
                                                     onClick={() =>
                                                         addProductToCart(p)
                                                     }
-                                                    className="flex h-[120px] flex-col justify-between rounded-lg border border-emerald-700/60 bg-emerald-950/40 px-3 py-3 text-left shadow-sm transition hover:-translate-y-[1px] hover:border-emerald-400 hover:bg-emerald-900/60"
+                                                    className={`${posTileClass} h-[120px] justify-between`}
                                                 >
                                                     <div className="mb-1 flex items-start justify-between gap-2">
-                                                        <div className="text-sm leading-snug font-semibold text-emerald-50">
+                                                        <div className="text-sm leading-snug font-semibold">
                                                             {p.name}
                                                         </div>
-                                                        <span className="rounded-full bg-emerald-700 px-2 py-0.5 text-[10px] font-semibold tracking-wide whitespace-nowrap text-emerald-50 uppercase">
+                                                        <span
+                                                            className={`rounded-full px-2 py-0.5 text-[11px] font-semibold tracking-wide whitespace-nowrap uppercase ${categoryBadgeClass(p.category)}`}
+                                                        >
                                                             {normalizeCategory(
                                                                 p.category,
                                                             )}
                                                         </span>
                                                     </div>
-                                                    <div className="mt-1 text-lg font-bold text-emerald-300">
+                                                    <div className="mt-1 text-lg font-bold text-emerald-700 tabular-nums dark:text-emerald-300">
                                                         {money(Number(p.price))}
                                                     </div>
                                                     <div
-                                                        className={`text-xs ${p.stock_quantity <= p.low_stock_threshold ? 'text-amber-300' : 'text-emerald-200/70'}`}
+                                                        className={`text-xs ${p.stock_quantity <= p.low_stock_threshold ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}`}
                                                     >
                                                         Stock:{' '}
                                                         {p.stock_quantity}
@@ -1717,7 +2002,7 @@ export default function TablesIndex({
                                     <Label className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                                         Cart
                                     </Label>
-                                    <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-3 text-sm">
+                                    <div className={`min-h-0 flex-1 overflow-hidden ${posPanelClass} p-3 text-sm`}>
                                         <div className="max-h-40 space-y-2 overflow-y-auto lg:h-full lg:max-h-none">
                                             {addItemCart.length === 0 && (
                                                 <div className="px-2 py-1 text-sm text-muted-foreground italic">
@@ -1727,7 +2012,7 @@ export default function TablesIndex({
                                             {addItemCart.map((item) => (
                                                 <div
                                                     key={item.productId}
-                                                    className="flex items-center justify-between gap-2 rounded-md bg-slate-900/70 px-2 py-1.5"
+                                                    className={posCartRowClass}
                                                 >
                                                     <div className="flex-1">
                                                         <div className="text-sm font-medium">
@@ -1950,21 +2235,31 @@ export default function TablesIndex({
                                 {checkoutSummary?.table_name ?? 'Table'}
                             </DialogTitle>
                             <DialogDescription>
-                                Card and transfer cannot exceed the grand total
-                                together; use cash for tips or change. Change is
-                                taken from the cash portion.
+                                Split between cash, card, and transfer. Cash may
+                                exceed the total; change is returned from cash.
                             </DialogDescription>
                         </DialogHeader>
                         {checkoutSummary && (
                             <>
+                                <div className="text-xs text-muted-foreground">
+                                    Played{' '}
+                                    {formatElapsedSeconds(
+                                        frozenElapsedSeconds ??
+                                            checkoutSummary.played_seconds ??
+                                            0,
+                                    )}
+                                </div>
+                                <TimeBlockPicker
+                                    blocks={checkoutBlocks}
+                                    counts={checkoutBlockCounts}
+                                    onChange={setCheckoutBlockCounts}
+                                />
                                 <div className="grid gap-2 text-sm">
                                     <div className="flex justify-between">
                                         <span className="text-muted-foreground">
                                             Time
                                         </span>
-                                        <span>
-                                            {money(checkoutSummary.time_total)}
-                                        </span>
+                                        <span>{money(checkoutTimeTotal)}</span>
                                     </div>
                                     <div className="flex justify-between">
                                         <span className="text-muted-foreground">
@@ -1976,186 +2271,51 @@ export default function TablesIndex({
                                     </div>
                                     <div className="flex justify-between font-semibold">
                                         <span>Grand total</span>
-                                        <span>
-                                            {money(checkoutSummary.grand_total)}
-                                        </span>
-                                    </div>
-                                    {(() => {
-                                        const preview = paymentPreview(
-                                            parseFloat(cash) || 0,
-                                            parseFloat(card) || 0,
-                                            parseFloat(transfer) || 0,
-                                            Number(
-                                                checkoutSummary.grand_total,
-                                            ) || 0,
-                                        );
-
-                                        if (
-                                            preview.cashValue <= 0 &&
-                                            preview.cardValue <= 0 &&
-                                            preview.transferValue <= 0
-                                        ) {
-                                            return null;
-                                        }
-
-                                        return (
-                                            <>
-                                                {preview.cardValue > 0 && (
-                                                    <div className="flex justify-between border-t border-border/60 pt-2">
-                                                        <span className="text-muted-foreground">
-                                                            Card
-                                                        </span>
-                                                        <span>
-                                                            {money(
-                                                                preview.cardValue,
-                                                            )}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                                {preview.transferValue > 0 && (
-                                                    <div className="flex justify-between">
-                                                        <span className="text-muted-foreground">
-                                                            Transfer
-                                                        </span>
-                                                        <span>
-                                                            {money(
-                                                                preview.transferValue,
-                                                            )}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                                {preview.cashValue > 0 && (
-                                                    <div className="flex justify-between">
-                                                        <span className="text-muted-foreground">
-                                                            Cash
-                                                        </span>
-                                                        <span>
-                                                            {money(
-                                                                preview.cashValue,
-                                                            )}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                                <div className="flex justify-between text-muted-foreground">
-                                                    <span>Total received</span>
-                                                    <span>
-                                                        {money(
-                                                            preview.totalPaid,
-                                                        )}
-                                                    </span>
-                                                </div>
-                                                {preview.change > 0.01 && (
-                                                    <div className="flex justify-between font-medium text-emerald-600 dark:text-emerald-400">
-                                                        <span>Change</span>
-                                                        <span>
-                                                            -{' '}
-                                                            {money(
-                                                                preview.change,
-                                                            )}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                            </>
-                                        );
-                                    })()}
-                                </div>
-                                <div className="grid gap-3">
-                                    <div className="flex items-center gap-2">
-                                        <Label className="w-24 shrink-0">
-                                            Cash
-                                        </Label>
-                                        <Input
-                                            type="number"
-                                            step="1"
-                                            min="0"
-                                            placeholder="0"
-                                            value={cash}
-                                            onChange={(e) => {
-                                                setCash(e.target.value);
-                                                setCheckoutError(null);
-                                            }}
-                                        />
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <Label className="w-24 shrink-0">
-                                            Card
-                                        </Label>
-                                        <Input
-                                            type="number"
-                                            step="1"
-                                            min="0"
-                                            max={maxCardAmount}
-                                            placeholder="0"
-                                            title={`Max ${money(maxCardAmount)} (with current transfer)`}
-                                            value={card}
-                                            onChange={(e) => {
-                                                setCheckoutError(null);
-                                                setCard(
-                                                    clampNonCashInput(
-                                                        e.target.value,
-                                                        maxCardAmount,
-                                                    ),
-                                                );
-                                            }}
-                                        />
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <Label className="w-24 shrink-0">
-                                            Transfer
-                                        </Label>
-                                        <Input
-                                            type="number"
-                                            step="1"
-                                            min="0"
-                                            max={maxTransferAmount}
-                                            placeholder="0"
-                                            title={`Max ${money(maxTransferAmount)} (with current card)`}
-                                            value={transfer}
-                                            onChange={(e) => {
-                                                setCheckoutError(null);
-                                                setTransfer(
-                                                    clampNonCashInput(
-                                                        e.target.value,
-                                                        maxTransferAmount,
-                                                    ),
-                                                );
-                                            }}
-                                        />
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <Label className="w-24 shrink-0">
-                                            Email (optional)
-                                        </Label>
-                                        <Input
-                                            type="email"
-                                            placeholder="customer@example.com"
-                                            value={customerEmail}
-                                            onChange={(e) =>
-                                                setCustomerEmail(e.target.value)
-                                            }
-                                        />
+                                        <span>{money(checkoutGrandTotal)}</span>
                                     </div>
                                 </div>
+                                <PaymentForm
+                                    total={checkoutGrandTotal}
+                                    cash={cash}
+                                    card={card}
+                                    transfer={transfer}
+                                    email={customerEmail}
+                                    onCashChange={(value) => {
+                                        setCash(value);
+                                        setCheckoutError(null);
+                                    }}
+                                    onCardChange={(value) => {
+                                        setCard(value);
+                                        setCheckoutError(null);
+                                    }}
+                                    onTransferChange={(value) => {
+                                        setTransfer(value);
+                                        setCheckoutError(null);
+                                    }}
+                                    onEmailChange={setCustomerEmail}
+                                />
                                 {checkoutError && (
                                     <p className="text-sm text-destructive">
                                         {checkoutError}
                                     </p>
                                 )}
-                                <DialogFooter>
+                                <DialogFooter className="flex-col gap-2 sm:flex-col">
                                     <Button
-                                        variant="outline"
-                                        onClick={() => closeCheckout()}
-                                        disabled={submitting}
-                                    >
-                                        Cancel
-                                    </Button>
-                                    <Button
+                                        className="h-11 w-full"
                                         onClick={handleCheckoutComplete}
                                         disabled={submitting}
                                     >
                                         {submitting
                                             ? 'Completing…'
-                                            : 'Complete checkout'}
+                                            : `Complete checkout · ${money(checkoutGrandTotal)}`}
+                                    </Button>
+                                    <Button
+                                        variant="ghost"
+                                        className="w-full"
+                                        onClick={() => closeCheckout()}
+                                        disabled={submitting}
+                                    >
+                                        Cancel
                                     </Button>
                                 </DialogFooter>
                             </>
@@ -2165,6 +2325,183 @@ export default function TablesIndex({
                                 Loading…
                             </p>
                         )}
+                    </DialogContent>
+                </Dialog>
+
+                <Dialog
+                    open={alertDialogOpen}
+                    onOpenChange={(open) => {
+                        setAlertDialogOpen(open);
+                        if (!open) {
+                            const tableId = alertDialogTableId;
+                            setAlertDialogTableId(null);
+                            setAlertDraftCounts(emptyBlockCounts(catalogBlocks));
+                            if (
+                                !alertClosedAfterSaveRef.current &&
+                                tableId != null
+                            ) {
+                                restoreExpiredAlarm(tableId);
+                            }
+                            alertClosedAfterSaveRef.current = false;
+                        }
+                    }}
+                >
+                    <DialogContent className="sm:max-w-md">
+                        <DialogHeader>
+                            <DialogTitle>
+                                {alertDialogExtend
+                                    ? 'Extend timer'
+                                    : 'Set timer'}
+                            </DialogTitle>
+                            <DialogDescription>
+                                Adds time to this table’s play clock countdown.
+                                Pause freezes it. Billing still uses blocks when
+                                you end.
+                            </DialogDescription>
+                        </DialogHeader>
+                        <TimeBlockPicker
+                            blocks={catalogBlocks}
+                            counts={alertDraftCounts}
+                            onChange={setAlertDraftCounts}
+                        />
+                        <DialogFooter className="flex-col gap-2 sm:flex-col">
+                            <Button
+                                className="w-full"
+                                disabled={
+                                    alertSubmitting ||
+                                    totalForBlockCounts(
+                                        alertDraftCounts,
+                                        catalogBlocks,
+                                    ) <= 0
+                                }
+                                onClick={async () => {
+                                    if (alertDialogTableId == null) {
+                                        return;
+                                    }
+                                    const tableId = alertDialogTableId;
+                                    setAlertSubmitting(true);
+                                    const result = await inertiaPost(
+                                        `/tables/${tableId}/alert`,
+                                        {
+                                            time_blocks: alertDraftCounts,
+                                            extend: alertDialogExtend,
+                                        },
+                                        { preserveState: true },
+                                    );
+                                    setAlertSubmitting(false);
+                                    if (result === 'success') {
+                                        silenceExpiredAlarm(tableId);
+                                        alertClosedAfterSaveRef.current = true;
+                                        setAlertDialogOpen(false);
+                                        setAlertDialogTableId(null);
+                                    } else {
+                                        restoreExpiredAlarm(tableId);
+                                        router.reload({ preserveScroll: true });
+                                    }
+                                }}
+                            >
+                                {alertSubmitting
+                                    ? 'Saving…'
+                                    : alertDialogExtend
+                                      ? 'Extend alert'
+                                      : 'Start alert'}
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                className="w-full"
+                                disabled={alertSubmitting}
+                                onClick={() => setAlertDialogOpen(false)}
+                            >
+                                Cancel
+                            </Button>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
+
+                <Dialog
+                    open={expiredAlertTableId != null}
+                    onOpenChange={() => {
+                        /* must take an action */
+                    }}
+                >
+                    <DialogContent
+                        className="sm:max-w-md"
+                        onPointerDownOutside={(e) => e.preventDefault()}
+                        onEscapeKeyDown={(e) => e.preventDefault()}
+                    >
+                        <DialogHeader>
+                            <DialogTitle className="text-rose-600 dark:text-rose-400">
+                                Alert time is up
+                                {expiredAlertTableId
+                                    ? ` — ${
+                                          tables.find(
+                                              (t) =>
+                                                  t.id === expiredAlertTableId,
+                                          )?.name ?? 'Table'
+                                      }`
+                                    : ''}
+                            </DialogTitle>
+                            <DialogDescription>
+                                Choose what to do next. This dialog stays open
+                                until you act.
+                            </DialogDescription>
+                        </DialogHeader>
+                        <DialogFooter className="flex-col gap-2 sm:flex-col">
+                            <Button
+                                className="w-full"
+                                onClick={() => {
+                                    if (expiredAlertTableId == null) {
+                                        return;
+                                    }
+                                    const id = expiredAlertTableId;
+                                    silenceExpiredAlarm(id);
+                                    setAlertDialogTableId(id);
+                                    setAlertDialogExtend(true);
+                                    setAlertDraftCounts(
+                                        emptyBlockCounts(catalogBlocks),
+                                    );
+                                    setAlertDialogOpen(true);
+                                }}
+                            >
+                                Extend alert
+                            </Button>
+                            <Button
+                                className="w-full"
+                                variant="destructive"
+                                onClick={() => {
+                                    if (expiredAlertTableId == null) {
+                                        return;
+                                    }
+                                    const id = expiredAlertTableId;
+                                    silenceExpiredAlarm(id);
+                                    handleAction(id, 'end');
+                                }}
+                            >
+                                End session
+                            </Button>
+                            <Button
+                                className="w-full"
+                                variant="outline"
+                                onClick={async () => {
+                                    if (expiredAlertTableId == null) {
+                                        return;
+                                    }
+                                    const id = expiredAlertTableId;
+                                    silenceExpiredAlarm(id);
+                                    const result = await inertiaPost(
+                                        `/tables/${id}/alert/clear`,
+                                        {},
+                                        { preserveState: true },
+                                    );
+                                    if (result !== 'success') {
+                                        restoreExpiredAlarm(id);
+                                        router.reload({ preserveScroll: true });
+                                    }
+                                }}
+                            >
+                                Clear alert · keep playing
+                            </Button>
+                        </DialogFooter>
                     </DialogContent>
                 </Dialog>
 
@@ -2191,6 +2528,7 @@ export default function TablesIndex({
                             setCancelSessionTableId(null);
                             setCancelSessionError(null);
                             setCancelSessionReason('');
+                            setCancelSessionRestock(true);
                         }
                     }}
                 >
@@ -2207,27 +2545,49 @@ export default function TablesIndex({
                                     : ''}
                             </AlertDialogDescription>
                         </AlertDialogHeader>
-                        <div className="space-y-2">
-                            <Label htmlFor="cancel-session-reason">
-                                Reason{' '}
-                                {isAdmin
-                                    ? '(optional for admin)'
-                                    : '(required)'}
-                            </Label>
-                            <textarea
-                                id="cancel-session-reason"
-                                className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                value={cancelSessionReason}
-                                onChange={(event) => {
-                                    setCancelSessionReason(event.target.value);
-                                    setCancelSessionError(null);
-                                }}
-                                placeholder={
-                                    isAdmin
-                                        ? 'Optional note for the daily report'
-                                        : 'Explain why this session is being cancelled'
-                                }
-                            />
+                        <div className="space-y-3">
+                            <div className="space-y-2">
+                                <Label htmlFor="cancel-session-reason">
+                                    Reason{' '}
+                                    {isAdmin
+                                        ? '(optional for admin)'
+                                        : '(required)'}
+                                </Label>
+                                <textarea
+                                    id="cancel-session-reason"
+                                    className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    value={cancelSessionReason}
+                                    onChange={(event) => {
+                                        setCancelSessionReason(
+                                            event.target.value,
+                                        );
+                                        setCancelSessionError(null);
+                                    }}
+                                    placeholder={
+                                        isAdmin
+                                            ? 'Optional note for the daily report'
+                                            : 'Explain why this session is being cancelled'
+                                    }
+                                />
+                            </div>
+                            <label className="flex items-start gap-3 rounded-md border border-border/70 bg-muted/30 p-3 text-sm">
+                                <Checkbox
+                                    checked={cancelSessionRestock}
+                                    onCheckedChange={(checked) =>
+                                        setCancelSessionRestock(checked === true)
+                                    }
+                                    className="mt-0.5"
+                                />
+                                <span>
+                                    <span className="font-medium">
+                                        Return products to stock
+                                    </span>
+                                    <span className="mt-0.5 block text-muted-foreground">
+                                        Turn off if drinks/snacks were already
+                                        given out or used.
+                                    </span>
+                                </span>
+                            </label>
                         </div>
                         {cancelSessionError && (
                             <p className="text-sm text-destructive">

@@ -38,19 +38,52 @@ if(!app.requestSingleInstanceLock()) {app.quit();} else {
     if(canceled)return;
     try {
       await runtime.backup(filePath);
-      await dialog.showMessageBox(window,{type:'info',message:'Backup saved',detail:'Copy this file to the new PC and select it when opening Lox Billiard POS for the first time.'});
+      await dialog.showMessageBox(window,{type:'info',message:'Backup saved',detail:'Copy this .loxbackup file to the other PC.\n\nOn a brand-new install, the app asks for it on first open.\n\nIf that PC already opened the app once, use Lox Billiard → Replace data from backup… there, or rename the "%APPDATA%\\Lox Billiard POS" folder and reopen the app to get the import prompt again.'});
     }catch(error){await dialog.showMessageBox(window,{type:'error',message:'Backup could not be saved',detail:error.message});}
+  }
+  async function replaceFromBackup() {
+    if(quitting||stopped)return;
+    const confirm=await dialog.showMessageBox(window,{
+      type:'warning',
+      buttons:['Cancel','Replace and restart'],
+      defaultId:0,
+      cancelId:0,
+      message:'Replace all data on this PC?',
+      detail:'This moves the current local data aside and restarts so you can import a .loxbackup file.\n\nCurrent data is kept in a renamed folder under AppData and is not deleted. Running timers will stop with the app.',
+    });
+    if(confirm.response!==1)return;
+    quitting=true;
+    clearInterval(backupTimer);
+    status('Preparing to import a backup…');
+    try {
+      await runtime?.stop();
+      stopped=true;
+      const stamp=new Date().toISOString().replace(/[:.]/g,'-');
+      const aside=`${dataDir}-before-import-${stamp}`;
+      await fs.rename(dataDir,aside);
+      await dialog.showMessageBox(window,{
+        type:'info',
+        message:'Restarting for import',
+        detail:`Previous data was moved to:\n${aside}\n\nAfter restart, choose your .loxbackup file (Import my data).`,
+      });
+      app.relaunch();
+      app.exit(0);
+    }catch(error){
+      await dialog.showErrorBox('Could not prepare import',error.message+'\n\nClose the app, rename "%APPDATA%\\Lox Billiard POS", then open the app again to import.');
+      quitting=false;stopped=false;
+    }
   }
   function setMenu() {
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       {label:'Lox Billiard',submenu:[
         {label:'Save backup…',enabled:ready,click:saveBackup},
+        {label:'Replace data from backup…',enabled:ready,click:()=>{void replaceFromBackup();}},
         {label:'Open backup folder',click:()=>shell.openPath(path.join(dataDir,'backups'))},
         {label:'Open diagnostic logs',click:()=>shell.openPath(path.join(dataDir,'logs'))},
         {type:'separator'},{label:'Exit',click:()=>app.quit()}
       ]},
       {label:'View',submenu:[{role:'reload'},{role:'resetZoom'},{role:'zoomIn'},{role:'zoomOut'},{role:'togglefullscreen'}]},
-      {label:'Help',submenu:[{label:'About Lox Billiard POS',click:()=>dialog.showMessageBox(window,{message:`Lox Billiard POS ${app.getVersion()}`,detail:'Your data is stored locally on this Windows account. Use Save backup to transfer it to another PC.\n\n'+dataDir})}]}
+      {label:'Help',submenu:[{label:'About Lox Billiard POS',click:()=>dialog.showMessageBox(window,{message:`Lox Billiard POS ${app.getVersion()}`,detail:'Your data is stored locally on this Windows account.\n\nNew PC: import the .loxbackup on first launch.\nIf this PC already started without your backup, use Lox Billiard → Replace data from backup…\n\n'+dataDir})}]}
     ]));
   }
   app.on('second-instance',()=>{if(window){window.show();window.focus();}});
@@ -83,8 +116,24 @@ if(!app.requestSingleInstanceLock()) {app.quit();} else {
       if(!runtime.state.ready) {
         let backup=smoke?arg('--backup'):undefined;
         if(!backup) {
-          const chosen=await dialog.showOpenDialog(window,{title:'Select your Lox Billiard data backup',buttonLabel:'Import my data',properties:['openFile'],filters:[{name:'Lox Billiard backup',extensions:['loxbackup']}]});
-          if(chosen.canceled){await runtime.stop();stopped=true;app.quit();return;}
+          const chosen=await dialog.showOpenDialog(window,{
+            title:'Import your Lox Billiard backup',
+            message:'Choose the .loxbackup file from your other PC or USB drive.',
+            buttonLabel:'Import my data',
+            properties:['openFile'],
+            filters:[
+              {name:'Lox Billiard backup',extensions:['loxbackup']},
+              {name:'All files',extensions:['*']},
+            ],
+          });
+          if(chosen.canceled){
+            await dialog.showMessageBox(window,{
+              type:'info',
+              message:'Backup required',
+              detail:'Lox Billiard POS needs a .loxbackup file on first setup.\n\nCopy the backup onto this PC, open the app again, and choose Import my data.\n\nIf this PC already ran without your backup, close the app, rename the folder %APPDATA%\\Lox Billiard POS, then open the app again.',
+            });
+            await runtime.stop();stopped=true;app.quit();return;
+          }
           backup=chosen.filePaths[0];
         }
         await runtime.restore(backup);

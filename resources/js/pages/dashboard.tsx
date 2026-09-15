@@ -1,11 +1,12 @@
 import { Head, Link, router } from '@inertiajs/react';
 import { Wallet } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
+import { EmptyState } from '@/components/empty-state';
+import { PageHeader } from '@/components/page-header';
+import { Button } from '@/components/ui/button';
 import AppLayout from '@/layouts/app-layout';
-import { formatMoney, roundToNearestIncrement } from '@/lib/payments';
-import { dashboard } from '@/routes';
+import { formatMoney } from '@/lib/payments';
 import tablesRoutes from '@/routes/tables';
-import type { BreadcrumbItem } from '@/types';
 
 type TodayStats = {
     revenue: number;
@@ -36,7 +37,7 @@ type RunningSession = {
     table_name: string;
     started_at: string | null;
     duration_formatted: string | null;
-    current_bill: number;
+    current_bill: number | null;
     elapsed_seconds: number;
     session_status: string | null;
     last_resume_at: string | null;
@@ -45,19 +46,10 @@ type RunningSession = {
 
 type Props = {
     today: TodayStats;
-    rate_per_minute: number;
-    rounding_increment: number;
     tables: TableRow[];
     running_sessions: RunningSession[];
     isAdmin: boolean;
 };
-
-const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Dashboard', href: dashboard.url() },
-];
-
-const RATE_PER_MINUTE = 20000 / 60;
-const ROUNDING_INCREMENT = 500;
 
 function formatElapsed(seconds: number): string {
     const s = Math.max(0, Math.floor(seconds));
@@ -81,8 +73,6 @@ function formatDuration(seconds: number): string {
 
 export default function Dashboard({
     today,
-    rate_per_minute,
-    rounding_increment,
     tables,
     running_sessions,
 }: Props) {
@@ -90,13 +80,7 @@ export default function Dashboard({
 
     useEffect(() => {
         router.reload({
-            only: [
-                'today',
-                'tables',
-                'running_sessions',
-                'rate_per_minute',
-                'rounding_increment',
-            ],
+            only: ['today', 'tables', 'running_sessions'],
         });
     }, []);
 
@@ -130,26 +114,6 @@ export default function Dashboard({
         [now],
     );
 
-    const getLiveBill = useCallback(
-        (row: TableRow): number | null => {
-            const sec = getLiveElapsedSeconds(row);
-
-            if (sec == null) {
-                return null;
-            }
-
-            const rawTimeTotal =
-                (sec / 60) * (rate_per_minute ?? RATE_PER_MINUTE);
-            const timeTotal = roundToNearestIncrement(
-                rawTimeTotal,
-                rounding_increment ?? ROUNDING_INCREMENT,
-            );
-
-            return Math.round((timeTotal + (row.items_total ?? 0)) * 100) / 100;
-        },
-        [getLiveElapsedSeconds, rate_per_minute, rounding_increment],
-    );
-
     const getRunningSessionLive = useCallback(
         (s: RunningSession) => {
             let sec = s.elapsed_seconds;
@@ -161,18 +125,12 @@ export default function Dashboard({
                     Math.max(0, Math.floor((now - resumeMs) / 1000));
             }
 
-            const rawTimeTotal =
-                (sec / 60) * (rate_per_minute ?? RATE_PER_MINUTE);
-            const timeTotal = roundToNearestIncrement(
-                rawTimeTotal,
-                rounding_increment ?? ROUNDING_INCREMENT,
-            );
-            const bill =
-                Math.round((timeTotal + (s.items_total ?? 0)) * 100) / 100;
-
-            return { duration: formatDuration(sec), bill };
+            return {
+                duration: formatDuration(sec),
+                items: Number(s.items_total) || 0,
+            };
         },
-        [now, rate_per_minute, rounding_increment],
+        [now],
     );
 
     const statusLabel = (table: TableRow) => {
@@ -191,26 +149,27 @@ export default function Dashboard({
         return 'Available';
     };
 
-    const statusDot = (table: TableRow) => {
+    const statusChip = (table: TableRow) => {
         if (table.status === 'maintenance') {
-            return 'bg-red-500';
+            return 'bg-rose-500/15 text-rose-700 dark:text-rose-300';
         }
 
         if (table.session_status === 'paused') {
-            return 'bg-amber-500';
+            return 'bg-amber-500/15 text-amber-800 dark:text-amber-300';
         }
 
         if (table.session_status === 'running') {
-            return 'bg-emerald-500';
+            return 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-300';
         }
 
-        return 'bg-slate-400';
+        return 'bg-slate-500/15 text-slate-700 dark:text-slate-300';
     };
 
     return (
-        <AppLayout breadcrumbs={breadcrumbs}>
+        <AppLayout breadcrumbs={[]}>
             <Head title="Dashboard" />
             <div className="flex flex-1 flex-col gap-6 overflow-x-auto rounded-xl p-4">
+                <PageHeader title="Dashboard" description="Today's floor and sales at a glance." />
                 <section>
                     <h2 className="mb-3 text-sm font-medium text-muted-foreground">
                         Today at a glance
@@ -242,7 +201,7 @@ export default function Dashboard({
                                     </span>
                                 </div>
                             </div>
-                            <p className="mt-2 border-t border-sidebar-border/70 pt-2 text-xl font-semibold tabular-nums">
+                            <p className="mt-2 border-t border-sidebar-border/70 pt-2 text-3xl font-semibold tabular-nums">
                                 {formatMoney(Number(today.revenue) || 0)}
                             </p>
                         </div>
@@ -250,7 +209,7 @@ export default function Dashboard({
                             <p className="text-xs font-medium text-muted-foreground">
                                 Sessions
                             </p>
-                            <p className="mt-1 text-2xl font-semibold tabular-nums">
+                            <p className="mt-1 text-3xl font-semibold tabular-nums">
                                 {today.sessions_count ?? 0}
                             </p>
                         </div>
@@ -258,7 +217,7 @@ export default function Dashboard({
                             <p className="text-xs font-medium text-muted-foreground">
                                 Tables in use
                             </p>
-                            <p className="mt-1 text-2xl font-semibold tabular-nums">
+                            <p className="mt-1 text-3xl font-semibold tabular-nums">
                                 {today.tables_in_use ?? 0}
                                 <span className="ml-1 text-base font-normal text-muted-foreground">
                                     / {today.tables_total ?? 0}
@@ -273,7 +232,7 @@ export default function Dashboard({
                                 <Wallet className="h-4 w-4" />
                                 Open tab
                             </div>
-                            <p className="mt-1 text-2xl font-semibold tabular-nums">
+                            <p className="mt-1 text-3xl font-semibold tabular-nums">
                                 {today.open_tabs_count ?? 0}
                             </p>
                             <p className="mt-0.5 text-xs text-muted-foreground">
@@ -292,7 +251,7 @@ export default function Dashboard({
                             {tables.map((table) => {
                                 const liveElapsed =
                                     getLiveElapsedSeconds(table);
-                                const liveBill = getLiveBill(table);
+                                const itemsTotal = Number(table.items_total) || 0;
 
                                 return (
                                     <li key={table.id}>
@@ -302,13 +261,26 @@ export default function Dashboard({
                                         >
                                             <div className="flex items-center gap-3">
                                                 <span
-                                                    className={`h-3 w-3 shrink-0 rounded-full ${statusDot(table)}`}
+                                                    className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                                                        table.status ===
+                                                        'maintenance'
+                                                            ? 'bg-rose-500'
+                                                            : table.session_status ===
+                                                                'paused'
+                                                              ? 'bg-amber-500'
+                                                              : table.session_status ===
+                                                                  'running'
+                                                                ? 'bg-emerald-500'
+                                                                : 'bg-slate-400'
+                                                    }`}
                                                     aria-hidden
                                                 />
                                                 <span className="font-medium">
                                                     {table.name}
                                                 </span>
-                                                <span className="text-sm text-muted-foreground">
+                                                <span
+                                                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusChip(table)}`}
+                                                >
                                                     {statusLabel(table)}
                                                 </span>
                                             </div>
@@ -321,10 +293,11 @@ export default function Dashboard({
                                                         {formatElapsed(
                                                             liveElapsed,
                                                         )}
-                                                        {liveBill != null && (
+                                                        {itemsTotal > 0 && (
                                                             <span className="ml-2 font-medium text-foreground">
+                                                                items{' '}
                                                                 {formatMoney(
-                                                                    liveBill,
+                                                                    itemsTotal,
                                                                 )}
                                                             </span>
                                                         )}
@@ -343,9 +316,17 @@ export default function Dashboard({
                         Currently running sessions
                     </h2>
                     {running_sessions.length === 0 ? (
-                        <div className="rounded-xl border border-sidebar-border/70 bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground dark:border-sidebar-border">
-                            No active sessions. Start a game from Tables.
-                        </div>
+                        <EmptyState
+                            title="No tables in play"
+                            description="Start a session from the Tables page when guests sit down."
+                            action={
+                                <Button asChild>
+                                    <Link href={tablesRoutes.index.url()}>
+                                        Go to Tables
+                                    </Link>
+                                </Button>
+                            }
+                        />
                     ) : (
                         <div className="overflow-hidden rounded-xl border border-sidebar-border/70 bg-card dark:border-sidebar-border">
                             <table className="w-full text-sm">
@@ -361,7 +342,7 @@ export default function Dashboard({
                                             Duration
                                         </th>
                                         <th className="px-4 py-3 text-right font-medium">
-                                            Current bill
+                                            Items
                                         </th>
                                     </tr>
                                 </thead>
@@ -389,7 +370,7 @@ export default function Dashboard({
                                                     {live.duration}
                                                 </td>
                                                 <td className="px-4 py-3 text-right font-medium tabular-nums">
-                                                    {formatMoney(live.bill)}
+                                                    {formatMoney(live.items)}
                                                 </td>
                                             </tr>
                                         );

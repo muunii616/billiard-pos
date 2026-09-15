@@ -37,8 +37,8 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
+import { PageHeader } from '@/components/page-header';
 import AppLayout from '@/layouts/app-layout';
-import type { BreadcrumbItem } from '@/types';
 
 type User = {
     id: number;
@@ -51,17 +51,6 @@ type User = {
 type Props = {
     users: User[];
 };
-
-const breadcrumbs: BreadcrumbItem[] = [
-    {
-        title: 'Admin',
-        href: '/admin/users',
-    },
-    {
-        title: 'Users',
-        href: '/admin/users',
-    },
-];
 
 function userInitials(name: string): string {
     return (
@@ -76,8 +65,12 @@ function userInitials(name: string): string {
 }
 
 export default function AdminUsers({ users }: Props) {
-    const { auth } = usePage().props as { auth: { user: { id: number } } };
-    const currentUserId = auth.user.id;
+    const page = usePage().props as {
+        auth: { user: { id: number } };
+        errors?: Record<string, string>;
+    };
+    const currentUserId = page.auth.user.id;
+    const pageUserError = page.errors?.user ?? null;
     const [createOpen, setCreateOpen] = useState(false);
     const [editUser, setEditUser] = useState<User | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
@@ -154,37 +147,49 @@ export default function AdminUsers({ users }: Props) {
             return;
         }
 
-        router.delete(`/admin/users/${deleteTarget.id}`, {
-            onFinish: () => setDeleteTarget(null),
+        const targetId = deleteTarget.id;
+        router.delete(`/admin/users/${targetId}`, {
+            preserveScroll: true,
+            onSuccess: () => {
+                setDeleteError(null);
+                setDeleteTarget(null);
+            },
+            onError: (errs) => {
+                const message =
+                    (typeof errs.user === 'string' && errs.user) ||
+                    'Could not delete this user.';
+                setDeleteError(message);
+                setDeleteTarget(null);
+            },
+            onFinish: () => {
+                // Keep dialog closed after attempt; errors show in the page alert.
+            },
         });
     };
 
     return (
-        <AppLayout breadcrumbs={breadcrumbs}>
+        <AppLayout breadcrumbs={[]}>
             <Head title="Users" />
             <div className="flex flex-1 flex-col gap-6 rounded-xl p-4">
-                {deleteError && (
+                {(deleteError || pageUserError) && (
                     <Alert variant="destructive">
                         <AlertTitle>Action failed</AlertTitle>
-                        <AlertDescription>{deleteError}</AlertDescription>
+                        <AlertDescription>
+                            {deleteError || pageUserError}
+                        </AlertDescription>
                     </Alert>
                 )}
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                        <h1 className="text-xl font-semibold tracking-tight">
-                            Users
-                        </h1>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                            Manage staff accounts and roles for your venue.
-                        </p>
-                    </div>
+                <PageHeader
+                    title="Users"
+                    description="Manage staff accounts and roles for your venue."
+                >
                     <Button
                         className="w-full shrink-0 sm:w-auto"
                         onClick={() => setCreateOpen(true)}
                     >
                         + Add user
                     </Button>
-                </div>
+                </PageHeader>
 
                 {users.length === 0 ? (
                     <Card className="border-dashed border-sidebar-border/70 dark:border-sidebar-border">
@@ -259,7 +264,8 @@ export default function AdminUsers({ users }: Props) {
                                     </Button>
                                     <Button
                                         size="sm"
-                                        variant="destructive"
+                                        variant="ghost"
+                                        className="text-destructive hover:text-destructive"
                                         onClick={() => handleDelete(user)}
                                         disabled={user.id === currentUserId}
                                     >

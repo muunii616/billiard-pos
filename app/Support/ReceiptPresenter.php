@@ -13,15 +13,36 @@ final class ReceiptPresenter
         $lineItems = [];
         foreach ($sessions as $session) {
             $seconds = (int) $session->total_played_seconds;
-            if ($seconds > 0 || $session->time_total > 0) {
+            $blockCounts = is_array($session->time_blocks) ? $session->time_blocks : [];
+            $blockLines = TableTimeBilling::lineItemsForBlocks(
+                TableTimeBilling::normalizeCounts($blockCounts)
+            );
+
+            if ($blockLines !== []) {
+                foreach ($blockLines as $blockLine) {
+                    $tableLabel = trim((string) ($session->table?->name ?? 'Table'));
+                    if ($tableLabel === '') {
+                        $tableLabel = 'Table';
+                    } elseif (! preg_match('/^table\b/i', $tableLabel)) {
+                        $tableLabel = 'Table '.$tableLabel;
+                    }
+                    $lineItems[] = [
+                        ...$blockLine,
+                        'description' => $tableLabel.' · '.$blockLine['description'],
+                        'from' => $session->started_at?->copy()->setTimezone(PosDate::timezone())->format('d-m-Y h:i:s A'),
+                        'to' => $session->ended_at?->copy()->setTimezone(PosDate::timezone())->format('d-m-Y h:i:s A'),
+                        'duration' => sprintf('%02d:%02d:%02d', intdiv($seconds, 3600), intdiv($seconds % 3600, 60), $seconds % 60),
+                    ];
+                }
+            } elseif ($seconds > 0 || $session->time_total > 0) {
                 $lineItems[] = [
                     'type' => 'time',
-                    'description' => 'Table '.($session->table?->name ?? '').' — time',
+                    'description' => self::tableTimeLabel($session->table?->name),
                     'from' => $session->started_at?->copy()->setTimezone(PosDate::timezone())->format('d-m-Y h:i:s A'),
                     'to' => $session->ended_at?->copy()->setTimezone(PosDate::timezone())->format('d-m-Y h:i:s A'),
                     'duration' => sprintf('%02d:%02d:%02d', intdiv($seconds, 3600), intdiv($seconds % 3600, 60), $seconds % 60),
-                    'rate' => TableTimeBilling::ratePerMinute(),
-                    'quantity' => TableTimeBilling::chargedMinutesForSeconds($seconds),
+                    'quantity' => 1,
+                    'unit_price' => (float) $session->time_total,
                     'subtotal' => (float) $session->time_total,
                 ];
             }
@@ -63,7 +84,19 @@ final class ReceiptPresenter
             'started_at' => $receipt->session?->started_at?->copy()->setTimezone(PosDate::timezone())->format('d-m-Y h:i:s A'),
             'ended_at' => $receipt->session?->ended_at?->copy()->setTimezone(PosDate::timezone())->format('d-m-Y h:i:s A'),
             'line_items' => $lineItems,
-            'payments' => $receipt->payments->map(fn ($payment) => ['method' => $payment->method, 'amount' => (float) $payment->amount])->all(),
         ];
+    }
+
+    private static function tableTimeLabel(?string $tableName): string
+    {
+        $label = trim((string) $tableName);
+
+        if ($label === '') {
+            $label = 'Table';
+        } elseif (! preg_match('/^table\b/i', $label)) {
+            $label = 'Table '.$label;
+        }
+
+        return $label.' · time';
     }
 }

@@ -26,6 +26,12 @@ export function formatMoney(value: number): string {
     }).format(Number(value) || 0)}`;
 }
 
+export function formatPaymentMethod(method: string): string {
+    return method.replaceAll('_', ' ').replace(/\b\w/g, (letter) =>
+        letter.toUpperCase(),
+    );
+}
+
 export function clampNonCashInput(raw: string, maxAllowed: number): string {
     const cap = Math.max(0, roundMoney(maxAllowed));
 
@@ -121,6 +127,65 @@ export function validateOverpayAllowed({
     return { error: null, preview };
 }
 
+/** Validate a tab payment that may be a partial or a full close against remaining. */
+export function validateTabBalancePayment({
+    remaining,
+    cash,
+    card,
+    transfer,
+    money,
+}: {
+    remaining: number;
+    cash: number;
+    card: number;
+    transfer: number;
+    money: (value: number) => string;
+}): {
+    error: string | null;
+    preview: ReturnType<typeof paymentPreview>;
+    closes: boolean;
+    applied: number;
+} {
+    const preview = paymentPreview(cash, card, transfer, remaining);
+
+    if (preview.nonCashTotal > preview.total + TOTAL_EPSILON) {
+        return {
+            error: 'Card and transfer combined cannot exceed the remaining balance.',
+            preview,
+            closes: false,
+            applied: 0,
+        };
+    }
+
+    if (preview.totalPaid <= TOTAL_EPSILON) {
+        return {
+            error: 'Enter a payment amount.',
+            preview,
+            closes: false,
+            applied: 0,
+        };
+    }
+
+    if (
+        preview.change > TOTAL_EPSILON &&
+        preview.cashValue + Number.EPSILON < preview.change
+    ) {
+        return {
+            error: `Change is ${money(preview.change)}. Cash (${money(preview.cashValue)}) must cover change when the customer is due cash back.`,
+            preview,
+            closes: false,
+            applied: 0,
+        };
+    }
+
+    const closes = preview.totalPaid + TOTAL_EPSILON >= preview.total;
+    const applied = closes
+        ? preview.total
+        : roundMoney(preview.totalPaid);
+
+    return { error: null, preview, closes, applied };
+}
+
 export function buildExactSettlementPayments({
     expected,
     cash,
@@ -186,4 +251,81 @@ export function buildExactSettlementPayments({
     }
 
     return { error: null, payments, preview };
+}
+
+export function buildTabBalancePayments({
+    remaining,
+    cash,
+    card,
+    transfer,
+    money,
+}: {
+    remaining: number;
+    cash: number;
+    card: number;
+    transfer: number;
+    money: (value: number) => string;
+}): {
+    error: string | null;
+    payments: PaymentRow[];
+    preview: ReturnType<typeof paymentPreview>;
+    closes: boolean;
+    applied: number;
+} {
+    const { error, preview, closes, applied } = validateTabBalancePayment({
+        remaining,
+        cash,
+        card,
+        transfer,
+        money,
+    });
+
+    if (error) {
+        return { error, payments: [], preview, closes: false, applied: 0 };
+    }
+
+    const cashApplied =
+        closes && preview.change > TOTAL_EPSILON
+            ? roundMoney(preview.cashValue - preview.change)
+            : preview.cashValue;
+
+    if (cashApplied < -TOTAL_EPSILON) {
+        return {
+            error: 'Invalid cash amount.',
+            payments: [],
+            preview,
+            closes: false,
+            applied: 0,
+        };
+    }
+
+    const payments: PaymentRow[] = [];
+
+    if (preview.cardValue > 0) {
+        payments.push({ method: 'card', amount: preview.cardValue });
+    }
+
+    if (preview.transferValue > 0) {
+        payments.push({ method: 'transfer_qr', amount: preview.transferValue });
+    }
+
+    if (cashApplied > 0) {
+        payments.push({ method: 'cash', amount: cashApplied });
+    }
+
+    const paymentsSum = roundMoney(
+        payments.reduce((sum, payment) => sum + payment.amount, 0),
+    );
+
+    if (Math.abs(paymentsSum - applied) > 0.02) {
+        return {
+            error: 'Could not balance payment split. Check amounts.',
+            payments: [],
+            preview,
+            closes: false,
+            applied: 0,
+        };
+    }
+
+    return { error: null, payments, preview, closes, applied };
 }

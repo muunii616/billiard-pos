@@ -145,7 +145,7 @@ test('open tabs can be merged into a target tab', function () {
     expect($mergedItem->quantity)->toBe(3);
 });
 
-test('table time rounds to the nearest five-minute billing interval', function () {
+test('table time is charged from stacked blocks not play minutes', function () {
     $user = User::factory()->create();
     $table = BilliardTable::create([
         'name' => 'Table 3',
@@ -164,6 +164,7 @@ test('table time rounds to the nearest five-minute billing interval', function (
 
     $this->actingAs($user)
         ->post(route('tables.end', $table), [
+            'time_blocks' => ['15' => 1],
             'payments' => [
                 ['method' => 'cash', 'amount' => 5000],
             ],
@@ -171,12 +172,61 @@ test('table time rounds to the nearest five-minute billing interval', function (
         ->assertRedirect();
 
     $session->refresh();
-    expect((float) $session->time_total)->toBe(5000.0);
+    expect((float) $session->time_total)->toBe(5000.0)
+        ->and($session->time_blocks)->toBe(['15' => 1])
+        ->and((int) $session->total_minutes)->toBe(15);
 
     $receipt = Receipt::query()->where('game_session_id', $session->id)->first();
     expect($receipt)->not->toBeNull();
     expect((float) $receipt->time_total)->toBe(5000.0)
         ->and((float) $receipt->grand_total)->toBe(5000.0);
+});
+
+test('table alert uses play clock and freezes when paused', function () {
+    $user = User::factory()->create();
+    $table = BilliardTable::create([
+        'name' => 'Alert Table',
+        'status' => 'available',
+    ]);
+
+    $this->actingAs($user)->post(route('tables.start', $table))->assertRedirect();
+    $session = $table->fresh()->latestGameSession;
+    expect($session)->not->toBeNull();
+
+    $this->actingAs($user)
+        ->post(route('tables.alert.set', $table), [
+            'time_blocks' => ['15' => 1],
+        ])
+        ->assertRedirect();
+
+    $session->refresh();
+    expect($session->hasAlert())->toBeTrue()
+        ->and($session->alert_at_played_seconds)->toBeGreaterThanOrEqual(15 * 60)
+        ->and($session->alertRemainingSeconds())->toBeGreaterThan(14 * 60);
+
+    $target = (int) $session->alert_at_played_seconds;
+
+    $this->actingAs($user)->post(route('tables.pause', $table))->assertRedirect();
+    $session->refresh();
+    $remainingWhilePaused = $session->alertRemainingSeconds();
+    expect($session->status)->toBe('paused')
+        ->and($session->alert_at_played_seconds)->toBe($target)
+        ->and($remainingWhilePaused)->not->toBeNull()
+        ->and($remainingWhilePaused)->toBeGreaterThan(0);
+
+    $this->travel(30)->seconds();
+    $session->refresh();
+    expect($session->alertRemainingSeconds())->toBe($remainingWhilePaused)
+        ->and($session->alert_at_played_seconds)->toBe($target);
+
+    $this->actingAs($user)->post(route('tables.resume', $table))->assertRedirect();
+    $session->refresh();
+    expect($session->status)->toBe('running')
+        ->and($session->alert_at_played_seconds)->toBe($target);
+
+    $this->actingAs($user)->post(route('tables.alert.clear', $table))->assertRedirect();
+    $session->refresh();
+    expect($session->hasAlert())->toBeFalse();
 });
 
 test('employee must provide a reason when cancelling an active table session', function () {
@@ -235,7 +285,7 @@ test('employee cancellation stores the reason and appears in overview', function
             'reason' => 'Customer left before paying.',
         ])
         ->assertOk()
-        ->assertJsonPath('message', 'Session cancelled.');
+        ->assertJsonPath('message', 'Session cancelled. Products returned to stock.');
 
     $session->refresh();
     $table->refresh();
@@ -284,6 +334,76 @@ test('admin can cancel an active table session without a reason', function () {
     expect($session->status)->toBe('cancelled')
         ->and($session->cancel_reason)->toBeNull()
         ->and($session->cancelled_by_user_id)->toBe($admin->id);
+});
+
+test('start is blocked by an older ghost active session even when the table looks free', function () {
+    $user = User::factory()->create();
+    $table = BilliardTable::create([
+        'name' => 'Table 6',
+        'status' => 'available',
+    ]);
+
+    $ghost = GameSession::create([
+        'billiard_table_id' => $table->id,
+        'user_id' => $user->id,
+        'status' => 'running',
+        'started_at' => now('UTC')->subDays(8),
+        'last_resume_at' => now('UTC')->subDays(8),
+        'total_played_seconds' => 0,
+        'time_total' => 0,
+    ]);
+
+    GameSession::create([
+        'billiard_table_id' => $table->id,
+        'user_id' => $user->id,
+        'status' => 'completed',
+        'started_at' => now('UTC')->subHour(),
+        'ended_at' => now('UTC')->subMinutes(30),
+        'total_played_seconds' => 1800,
+        'time_total' => 10000,
+    ]);
+
+    $this->actingAs($user)
+        ->post(route('tables.start', $table))
+        ->assertRedirect()
+        ->assertSessionHasErrors('table');
+
+    expect($ghost->fresh()->status)->toBe('running');
+});
+
+test('cancel clears an older ghost active session behind a completed one', function () {
+    $admin = User::factory()->create(['role' => 'admin']);
+    $table = BilliardTable::create([
+        'name' => 'Table 7',
+        'status' => 'available',
+    ]);
+
+    $ghost = GameSession::create([
+        'billiard_table_id' => $table->id,
+        'user_id' => $admin->id,
+        'status' => 'paused',
+        'started_at' => now('UTC')->subDays(10),
+        'paused_at' => now('UTC')->subDays(10),
+        'total_played_seconds' => 60,
+        'time_total' => 0,
+    ]);
+
+    GameSession::create([
+        'billiard_table_id' => $table->id,
+        'user_id' => $admin->id,
+        'status' => 'completed',
+        'started_at' => now('UTC')->subHour(),
+        'ended_at' => now('UTC')->subMinutes(20),
+        'total_played_seconds' => 1200,
+        'time_total' => 10000,
+    ]);
+
+    $this->actingAs($admin)
+        ->postJson(route('tables.cancel-session', $table))
+        ->assertOk();
+
+    expect($ghost->fresh()->status)->toBe('cancelled')
+        ->and($table->fresh()->status)->toBe('available');
 });
 
 test('employee must provide a reason when deleting an open tab', function () {

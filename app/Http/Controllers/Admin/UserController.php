@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -73,7 +75,29 @@ class UserController extends Controller
             return redirect()->back()->withErrors(['user' => 'You cannot delete your own account.']);
         }
 
-        $user->delete();
+        if (($user->role ?? 'employee') === 'admin') {
+            $otherAdmins = User::query()
+                ->where('role', 'admin')
+                ->whereKeyNot($user->id)
+                ->count();
+
+            if ($otherAdmins === 0) {
+                return redirect()->back()->withErrors([
+                    'user' => 'You cannot delete the last admin account.',
+                ]);
+            }
+        }
+
+        try {
+            // Free the email so a replacement account can reuse it.
+            $user->email = 'deleted+'.$user->id.'.'.Str::lower(Str::random(8)).'@deleted.local';
+            $user->save();
+            $user->delete();
+        } catch (QueryException) {
+            return redirect()->back()->withErrors([
+                'user' => 'Could not delete this user because it is still linked to sales or stock history.',
+            ]);
+        }
 
         return redirect()->back();
     }

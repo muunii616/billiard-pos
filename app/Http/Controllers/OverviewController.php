@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\CheckoutSession;
 use App\Models\GameSession;
 use App\Models\Receipt;
 use App\Support\PosDate;
@@ -67,7 +68,7 @@ class OverviewController extends Controller
             ->whereBetween('ended_at', [$start, $end])
             ->count();
 
-        $cancelledSessions = GameSession::with(['table', 'cancelledBy'])
+        $cancelledSessions = GameSession::with(['table', 'cancelledBy', 'items'])
             ->where('status', 'cancelled')
             ->whereBetween('ended_at', [$start, $end])
             ->orderByDesc('ended_at')
@@ -78,7 +79,65 @@ class OverviewController extends Controller
                 'cancelled_at' => $session->ended_at?->toIso8601String(),
                 'cancelled_by' => $session->cancelledBy?->name ?? 'Unknown',
                 'reason' => $session->cancel_reason,
+                'played_seconds' => (int) $session->total_played_seconds,
+                'stock_restored' => $session->stock_restored,
+                'items' => $session->items->map(fn ($item) => [
+                    'product_name' => $item->product_name ?? 'Item',
+                    'quantity' => (int) $item->quantity,
+                    'unit_price' => (float) $item->unit_price,
+                    'line_total' => round((float) $item->unit_price * (int) $item->quantity, 2),
+                ])->values()->all(),
             ])
+            ->values()
+            ->all();
+
+        $voidedTabs = CheckoutSession::with([
+            'voidedBy',
+            'items',
+            'gameSessions.table',
+            'gameSessions.items',
+        ])
+            ->where('status', 'voided')
+            ->whereBetween('completed_at', [$start, $end])
+            ->orderByDesc('completed_at')
+            ->get()
+            ->map(function (CheckoutSession $checkout) {
+                $tableNames = $checkout->gameSessions
+                    ->map(fn ($s) => $s->table->name ?? 'Table')
+                    ->unique()
+                    ->values()
+                    ->all();
+                $items = $checkout->items
+                    ->map(fn ($item) => [
+                        'source' => 'tab',
+                        'product_name' => $item->product_name ?? 'Item',
+                        'quantity' => (int) $item->quantity,
+                        'unit_price' => (float) $item->unit_price,
+                        'line_total' => (float) $item->total_price,
+                    ])
+                    ->concat(
+                        $checkout->gameSessions->flatMap(fn ($session) => $session->items->map(fn ($item) => [
+                            'source' => $session->table->name ?? 'Table',
+                            'product_name' => $item->product_name ?? 'Item',
+                            'quantity' => (int) $item->quantity,
+                            'unit_price' => (float) $item->unit_price,
+                            'line_total' => (float) $item->total_price,
+                        ]))
+                    )
+                    ->values()
+                    ->all();
+
+                return [
+                    'id' => $checkout->id,
+                    'voided_at' => $checkout->completed_at?->toIso8601String(),
+                    'voided_by' => $checkout->voidedBy?->name ?? 'Unknown',
+                    'reason' => $checkout->void_reason,
+                    'table_names' => $tableNames,
+                    'stock_restored' => $checkout->stock_restored,
+                    'time_total' => (float) $checkout->gameSessions->sum('time_total'),
+                    'items' => $items,
+                ];
+            })
             ->values()
             ->all();
 
@@ -188,6 +247,7 @@ class OverviewController extends Controller
             ],
             'invoices' => $invoices,
             'cancelled_sessions' => $cancelledSessions,
+            'voided_tabs' => $voidedTabs,
             'selected_year' => $selectedYear,
         ]);
     }

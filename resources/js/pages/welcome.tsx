@@ -8,7 +8,7 @@ export default function Welcome() {
 
     return (
         <>
-            <Head title="Billiard POS">
+            <Head title="Lox Billiard">
                 <link rel="preconnect" href="https://fonts.bunny.net" />
                 <link
                     href="https://fonts.bunny.net/css?family=instrument-sans:400,500,600"
@@ -34,13 +34,13 @@ export default function Welcome() {
                 <main className="relative flex flex-col items-center text-center">
                     <div className="mb-8 flex h-32 w-32 items-center justify-center">
                         <img
-                            src="/logo.png"
-                            alt="Billiard POS"
+                            src="/logo-ui.png"
+                            alt="Lox Billiard"
                             className="h-full w-full object-contain"
                         />
                     </div>
                     <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                        Billiard POS
+                        Lox Billiard
                     </h1>
                     <p className="mt-3 max-w-sm text-base text-slate-300 sm:text-lg">
                         Table management and point of sale for your billiard

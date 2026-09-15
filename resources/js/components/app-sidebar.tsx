@@ -1,5 +1,14 @@
 import { Link, usePage } from '@inertiajs/react';
-import { BarChart3, LayoutGrid, Table2, Users, Wallet } from 'lucide-react';
+import {
+    BarChart3,
+    Banknote,
+    Boxes,
+    LayoutGrid,
+    Package,
+    Receipt,
+    Table2,
+    Users,
+} from 'lucide-react';
 import { NavMain } from '@/components/nav-main';
 import { NavUser } from '@/components/nav-user';
 import {
@@ -15,7 +24,7 @@ import { dashboard, overview } from '@/routes';
 import tablesRoutes from '@/routes/tables';
 import type { NavItem } from '@/types';
 
-const mainNavItems: NavItem[] = [
+const floorNavItems: NavItem[] = [
     {
         title: 'Dashboard',
         href: dashboard(),
@@ -29,12 +38,7 @@ const mainNavItems: NavItem[] = [
     {
         title: 'Open tab',
         href: '/checkouts',
-        icon: Wallet,
-    },
-    {
-        title: 'Overview',
-        href: overview.url(),
-        icon: BarChart3,
+        icon: Receipt,
     },
 ];
 
@@ -44,17 +48,26 @@ export function AppSidebar() {
         (page.props as { auth?: { user?: { role?: string } } })?.auth?.user
             ?.role === 'admin';
 
-    const navItems: NavItem[] = [
-        ...mainNavItems,
+    const officeNavItems: NavItem[] = [
+        {
+            title: 'Overview',
+            href: overview.url(),
+            icon: BarChart3,
+        },
         {
             title: 'Register',
             href: '/cash-register',
-            icon: Wallet,
+            icon: Banknote,
         },
         {
             title: 'Products',
             href: '/admin/products',
-            icon: LayoutGrid,
+            icon: Package,
+        },
+        {
+            title: 'Stock',
+            href: '/stock',
+            icon: Boxes,
         },
         ...(isAdmin
             ? [
@@ -101,7 +114,8 @@ export function AppSidebar() {
             </SidebarHeader>
 
             <SidebarContent>
-                <NavMain items={navItems} />
+                <NavMain items={floorNavItems} label="Floor" />
+                <NavMain items={officeNavItems} label="Office" />
             </SidebarContent>
 
             <SidebarFooter>

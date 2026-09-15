@@ -5,7 +5,7 @@
     <title>Receipt {{ $receiptNumber }}</title>
 </head>
 <body style="font-family: sans-serif; line-height: 1.5;">
-    <h1>Billiard POS — Receipt</h1>
+    <h1>Lox Billiard — Receipt</h1>
     <p><strong>Invoice:</strong> {{ $receiptNumber }}</p>
     <p><strong>Date:</strong> {{ $date }}</p>
     <p><strong>Time:</strong> {{ $time }}</p>

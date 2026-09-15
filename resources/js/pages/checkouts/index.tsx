@@ -1,8 +1,11 @@
-import { Head, router, usePage } from '@inertiajs/react';
+import { Head, Link, router, usePage } from '@inertiajs/react';
 import { Pencil, Wallet } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import { EmptyState } from '@/components/empty-state';
 import InvoiceDialog from '@/components/invoice-dialog';
 import type { InvoiceReceipt } from '@/components/invoice-dialog';
+import { PageHeader } from '@/components/page-header';
+import PaymentForm from '@/components/payment-form';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
     AlertDialog,
@@ -15,6 +18,7 @@ import {
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
     Dialog,
     DialogContent,
@@ -26,19 +30,28 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import AppLayout from '@/layouts/app-layout';
-import { normalizeCategory } from '@/lib/categories';
+import { categoryBadgeClass, normalizeCategory } from '@/lib/categories';
 import { formatDateTime } from '@/lib/dates';
 import { inertiaPost } from '@/lib/inertia-action';
 import { jsonHeaders } from '@/lib/http';
 import {
-    buildExactSettlementPayments,
-    clampNonCashInput,
+    buildTabBalancePayments,
     formatMoney,
     paymentPreview,
     roundMoney,
 } from '@/lib/payments';
+import { posCartRowClass, posPanelClass, posTileClass } from '@/lib/pos-ui';
 import receiptsRoutes from '@/routes/receipts';
-import type { BreadcrumbItem } from '@/types';
+
+type TabItemLine = {
+    id: number;
+    product_id: number | null;
+    product_name: string | null;
+    product_category?: string | null;
+    quantity: number;
+    unit_price: number;
+    total_price: number;
+};
 
 type CheckoutRow = {
     id: number;
@@ -48,6 +61,9 @@ type CheckoutRow = {
     time_total: number;
     items_total: number;
     grand_total: number;
+    amount_paid?: number;
+    remaining?: number;
+    tab_items?: TabItemLine[];
     table_sessions: {
         table_name: string;
         started_at: string | null;
@@ -55,6 +71,13 @@ type CheckoutRow = {
         played_seconds: number;
         time_total: number;
         products_total: number;
+        items?: {
+            id: number;
+            product_name: string | null;
+            quantity: number;
+            unit_price: number;
+            total_price: number;
+        }[];
     }[];
 };
 
@@ -67,16 +90,6 @@ type Product = {
     low_stock_threshold: number;
 };
 
-type TabItemLine = {
-    id: number;
-    product_id: number | null;
-    product_name: string | null;
-    product_category?: string | null;
-    quantity: number;
-    unit_price: number;
-    total_price: number;
-};
-
 type CheckoutSummary = {
     checkout_id: number;
     table_name: string;
@@ -87,10 +100,19 @@ type CheckoutSummary = {
         played_seconds: number;
         time_total: number;
         products_total: number;
+        items?: {
+            id: number;
+            product_name: string | null;
+            quantity: number;
+            unit_price: number;
+            total_price: number;
+        }[];
     }[];
     time_total: number;
     items_total: number;
     grand_total: number;
+    amount_paid?: number;
+    remaining?: number;
     tab_items?: TabItemLine[];
 };
 
@@ -100,10 +122,6 @@ type Props = {
     receipt?: InvoiceReceipt | null;
     isAdmin?: boolean;
 };
-
-const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Open tab', href: '/checkouts' },
-];
 
 export default function CheckoutsIndex({
     checkouts,
@@ -157,19 +175,10 @@ export default function CheckoutsIndex({
     const [editTabItemsError, setEditTabItemsError] = useState<string | null>(
         null,
     );
+    const [viewTabDetailsOpen, setViewTabDetailsOpen] = useState(false);
+    const [viewTabDetailsRow, setViewTabDetailsRow] =
+        useState<CheckoutRow | null>(null);
     const money = formatMoney;
-    const payGrandTotalNum =
-        payModalOpen && summary ? roundMoney(Number(summary.grand_total)) : 0;
-    const cardAmountNum = roundMoney(parseFloat(card) || 0);
-    const transferAmountNum = roundMoney(parseFloat(transfer) || 0);
-    const maxCardAmount =
-        payModalOpen && summary
-            ? Math.max(0, payGrandTotalNum - transferAmountNum)
-            : 0;
-    const maxTransferAmount =
-        payModalOpen && summary
-            ? Math.max(0, payGrandTotalNum - cardAmountNum)
-            : 0;
     const { auth, isAdmin } = usePage().props as {
         auth?: { user?: { role?: string } };
         isAdmin?: boolean;
@@ -179,6 +188,7 @@ export default function CheckoutsIndex({
     const [deleteTabConfirmOpen, setDeleteTabConfirmOpen] = useState(false);
     const [deleteTabId, setDeleteTabId] = useState<number | null>(null);
     const [deleteTabReason, setDeleteTabReason] = useState('');
+    const [deleteTabRestock, setDeleteTabRestock] = useState(true);
     const [deleteTabError, setDeleteTabError] = useState<string | null>(null);
     const [deleteTabSubmitting, setDeleteTabSubmitting] = useState(false);
     const [reopenTabConfirmOpen, setReopenTabConfirmOpen] = useState(false);
@@ -190,19 +200,37 @@ export default function CheckoutsIndex({
             return;
         }
 
-        const g = roundMoney(Number(summary.grand_total));
+        const remaining = roundMoney(
+            Number(summary.remaining ?? summary.grand_total),
+        );
         const d = roundMoney(parseFloat(card) || 0);
         const t = roundMoney(parseFloat(transfer) || 0);
 
-        if (d + t <= g + 0.01) {
+        if (d + t <= remaining + 0.01) {
             return;
         }
 
-        const newT = Math.min(t, g);
-        const newD = Math.min(d, Math.max(0, g - newT));
+        const newT = Math.min(t, remaining);
+        const newD = Math.min(d, Math.max(0, remaining - newT));
         setCard(newD === 0 ? '' : String(newD));
         setTransfer(newT === 0 ? '' : String(newT));
     }, [card, payModalOpen, summary, transfer]);
+
+    const payRemaining = roundMoney(
+        Number(summary?.remaining ?? summary?.grand_total ?? 0),
+    );
+    const payPreview = paymentPreview(
+        parseFloat(cash) || 0,
+        parseFloat(card) || 0,
+        parseFloat(transfer) || 0,
+        payRemaining,
+    );
+    const payCloses =
+        payPreview.totalPaid > 0.01 &&
+        payPreview.totalPaid + 0.01 >= payRemaining;
+    const payApplied = payCloses
+        ? payRemaining
+        : roundMoney(payPreview.totalPaid);
 
     const pageErrors =
         (usePage().props as { errors?: Record<string, string> }).errors ?? {};
@@ -386,8 +414,11 @@ export default function CheckoutsIndex({
             return;
         }
 
-        const settlement = buildExactSettlementPayments({
-            expected: Number(summary.grand_total) || 0,
+        const remaining = roundMoney(
+            Number(summary.remaining ?? summary.grand_total) || 0,
+        );
+        const settlement = buildTabBalancePayments({
+            remaining,
             cash: parseFloat(cash) || 0,
             card: parseFloat(card) || 0,
             transfer: parseFloat(transfer) || 0,
@@ -632,6 +663,7 @@ export default function CheckoutsIndex({
                 credentials: 'same-origin',
                 body: JSON.stringify({
                     reason: deleteTabReason.trim() || null,
+                    restock: deleteTabRestock,
                 }),
             });
             const data = await res.json().catch(() => ({}));
@@ -650,6 +682,7 @@ export default function CheckoutsIndex({
             setDeleteTabConfirmOpen(false);
             setDeleteTabId(null);
             setDeleteTabReason('');
+            setDeleteTabRestock(true);
             router.get('/checkouts', showAll ? { all: 1 } : {}, {
                 preserveScroll: true,
                 replace: true,
@@ -689,7 +722,7 @@ export default function CheckoutsIndex({
     };
 
     return (
-        <AppLayout breadcrumbs={breadcrumbs}>
+        <AppLayout breadcrumbs={[]}>
             <Head title="Open tab" />
             <div className="flex flex-1 flex-col gap-4 rounded-xl p-4">
                 {actionError && (
@@ -700,8 +733,7 @@ export default function CheckoutsIndex({
                         </Alert>
                     </div>
                 )}
-                <div className="flex items-center justify-between gap-2">
-                    <h1 className="text-xl font-semibold">Open tab</h1>
+                <PageHeader title="Open tab">
                     <div className="flex items-center gap-2">
                         {adminEnabled && (
                             <Button
@@ -723,7 +755,7 @@ export default function CheckoutsIndex({
                             </Button>
                         )}
                     </div>
-                </div>
+                </PageHeader>
 
                 <AlertDialog
                     open={mergeConfirmOpen}
@@ -757,6 +789,7 @@ export default function CheckoutsIndex({
                         if (!open) {
                             setDeleteTabId(null);
                             setDeleteTabReason('');
+                            setDeleteTabRestock(true);
                             setDeleteTabError(null);
                             setDeleteTabSubmitting(false);
                         }
@@ -767,31 +800,51 @@ export default function CheckoutsIndex({
                             <AlertDialogTitle>Delete tab?</AlertDialogTitle>
                             <AlertDialogDescription>
                                 {deleteTabId != null
-                                    ? `Tab #${deleteTabId} will be closed without payment. Stock will be restored. This cannot be undone.`
+                                    ? `Tab #${deleteTabId} will be closed without payment. This cannot be undone.`
                                     : ''}
                             </AlertDialogDescription>
                         </AlertDialogHeader>
-                        <div className="space-y-2">
-                            <Label htmlFor="delete-tab-reason">
-                                Reason{' '}
-                                {adminEnabled
-                                    ? '(optional for admin)'
-                                    : '(required)'}
-                            </Label>
-                            <textarea
-                                id="delete-tab-reason"
-                                className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                value={deleteTabReason}
-                                onChange={(event) => {
-                                    setDeleteTabReason(event.target.value);
-                                    setDeleteTabError(null);
-                                }}
-                                placeholder={
-                                    adminEnabled
-                                        ? 'Optional note for the record'
-                                        : 'Explain why this tab is being deleted'
-                                }
-                            />
+                        <div className="space-y-3">
+                            <div className="space-y-2">
+                                <Label htmlFor="delete-tab-reason">
+                                    Reason{' '}
+                                    {adminEnabled
+                                        ? '(optional for admin)'
+                                        : '(required)'}
+                                </Label>
+                                <textarea
+                                    id="delete-tab-reason"
+                                    className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    value={deleteTabReason}
+                                    onChange={(event) => {
+                                        setDeleteTabReason(event.target.value);
+                                        setDeleteTabError(null);
+                                    }}
+                                    placeholder={
+                                        adminEnabled
+                                            ? 'Optional note for the record'
+                                            : 'Explain why this tab is being deleted'
+                                    }
+                                />
+                            </div>
+                            <label className="flex items-start gap-3 rounded-md border border-border/70 bg-muted/30 p-3 text-sm">
+                                <Checkbox
+                                    checked={deleteTabRestock}
+                                    onCheckedChange={(checked) =>
+                                        setDeleteTabRestock(checked === true)
+                                    }
+                                    className="mt-0.5"
+                                />
+                                <span>
+                                    <span className="font-medium">
+                                        Return products to stock
+                                    </span>
+                                    <span className="mt-0.5 block text-muted-foreground">
+                                        Turn off if items were already given out
+                                        or used.
+                                    </span>
+                                </span>
+                            </label>
                         </div>
                         {deleteTabError && (
                             <p className="text-sm text-destructive">
@@ -847,10 +900,16 @@ export default function CheckoutsIndex({
                 </AlertDialog>
 
                 {checkouts.length === 0 ? (
-                    <div className="rounded-xl border border-sidebar-border/70 bg-muted/30 p-8 text-center text-muted-foreground">
-                        No open tabs. Move a session from Tables → End → Move to
-                        open tab.
-                    </div>
+                    <EmptyState
+                        icon={Wallet}
+                        title="No open tabs"
+                        description="End a table session and move it here, or send products from the Products page."
+                        action={
+                            <Button asChild>
+                                <Link href="/tables">Go to Tables</Link>
+                            </Button>
+                        }
+                    />
                 ) : (
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                         {checkouts.map((row) => (
@@ -912,8 +971,46 @@ export default function CheckoutsIndex({
                                                     tableSession.products_total,
                                                 )}
                                             </div>
+                                            {(tableSession.items?.length ??
+                                                0) > 0 && (
+                                                <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                                                    {tableSession.items?.map(
+                                                        (item) => (
+                                                            <li key={item.id}>
+                                                                {item.quantity}×{' '}
+                                                                {item.product_name ??
+                                                                    'Item'}{' '}
+                                                                (
+                                                                {money(
+                                                                    item.total_price,
+                                                                )}
+                                                                )
+                                                            </li>
+                                                        ),
+                                                    )}
+                                                </ul>
+                                            )}
                                         </div>
                                     ))}
+                                    {(row.tab_items?.length ?? 0) > 0 && (
+                                        <div className="mt-2 rounded-md bg-muted/40 p-2 text-xs">
+                                            <div className="font-medium">
+                                                Tab products
+                                            </div>
+                                            <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                                                {row.tab_items?.map((item) => (
+                                                    <li key={item.id}>
+                                                        {item.quantity}×{' '}
+                                                        {item.product_name ??
+                                                            'Item'}{' '}
+                                                        (
+                                                        {money(item.total_price)}
+                                                        )
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
                                     <div className="mt-3 grid grid-cols-2 gap-1 text-sm">
                                         <span className="text-muted-foreground">
                                             Time charge:
@@ -933,9 +1030,44 @@ export default function CheckoutsIndex({
                                         <span className="font-semibold">
                                             {money(Number(row.grand_total))}
                                         </span>
+                                        {Number(row.amount_paid ?? 0) > 0.01 && (
+                                            <>
+                                                <span className="text-muted-foreground">
+                                                    Paid so far:
+                                                </span>
+                                                <span className="text-emerald-700 dark:text-emerald-400">
+                                                    {money(
+                                                        Number(
+                                                            row.amount_paid ?? 0,
+                                                        ),
+                                                    )}
+                                                </span>
+                                                <span className="font-medium text-muted-foreground">
+                                                    Remaining:
+                                                </span>
+                                                <span className="font-semibold">
+                                                    {money(
+                                                        Number(
+                                                            row.remaining ??
+                                                                row.grand_total,
+                                                        ),
+                                                    )}
+                                                </span>
+                                            </>
+                                        )}
                                     </div>
                                 </div>
                                 <div className="mt-4 flex flex-wrap gap-2">
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => {
+                                            setViewTabDetailsRow(row);
+                                            setViewTabDetailsOpen(true);
+                                        }}
+                                    >
+                                        View details
+                                    </Button>
                                     <Button
                                         size="sm"
                                         variant="outline"
@@ -960,7 +1092,9 @@ export default function CheckoutsIndex({
                                         size="sm"
                                         onClick={() => openPayModal(row.id)}
                                     >
-                                        Pay now
+                                        {Number(row.amount_paid ?? 0) > 0.01
+                                            ? 'Pay remaining'
+                                            : 'Pay now'}
                                     </Button>
                                     {adminEnabled && row.status !== 'open' && (
                                         <Button
@@ -981,6 +1115,7 @@ export default function CheckoutsIndex({
                                             onClick={() => {
                                                 setDeleteTabId(row.id);
                                                 setDeleteTabReason('');
+                                                setDeleteTabRestock(true);
                                                 setDeleteTabError(null);
                                                 setDeleteTabConfirmOpen(true);
                                             }}
@@ -1024,7 +1159,7 @@ export default function CheckoutsIndex({
                                     <Label className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                                         Categories
                                     </Label>
-                                    <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-2 lg:max-h-none lg:flex-1">
+                                    <div className={`max-h-40 space-y-1 overflow-y-auto ${posPanelClass} p-2 lg:max-h-none lg:flex-1`}>
                                         <Button
                                             type="button"
                                             size="sm"
@@ -1065,7 +1200,7 @@ export default function CheckoutsIndex({
                                     <Label className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                                         Items
                                     </Label>
-                                    <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-3">
+                                    <div className={`min-h-0 flex-1 overflow-hidden ${posPanelClass} p-3`}>
                                         <div className="grid max-h-[34vh] grid-cols-1 content-start gap-3 overflow-y-auto text-sm sm:grid-cols-2 lg:h-full lg:max-h-none">
                                             {filteredProducts.length === 0 && (
                                                 <div className="col-span-2 px-2 py-1 text-muted-foreground">
@@ -1080,23 +1215,25 @@ export default function CheckoutsIndex({
                                                     onClick={() =>
                                                         addProductToCart(p)
                                                     }
-                                                    className="flex h-[120px] flex-col justify-between rounded-lg border border-emerald-700/60 bg-emerald-950/40 px-3 py-3 text-left shadow-sm transition hover:-translate-y-[1px] hover:border-emerald-400 hover:bg-emerald-900/60"
+                                                    className={`${posTileClass} h-[120px] justify-between`}
                                                 >
                                                     <div className="mb-1 flex items-start justify-between gap-2">
-                                                        <div className="text-sm leading-snug font-semibold text-emerald-50">
+                                                        <div className="text-sm leading-snug font-semibold">
                                                             {p.name}
                                                         </div>
-                                                        <span className="rounded-full bg-emerald-700 px-2 py-0.5 text-[10px] font-semibold tracking-wide whitespace-nowrap text-emerald-50 uppercase">
+                                                        <span
+                                                            className={`rounded-full px-2 py-0.5 text-[11px] font-semibold tracking-wide whitespace-nowrap uppercase ${categoryBadgeClass(p.category)}`}
+                                                        >
                                                             {normalizeCategory(
                                                                 p.category,
                                                             )}
                                                         </span>
                                                     </div>
-                                                    <div className="mt-1 text-lg font-bold text-emerald-300">
+                                                    <div className="mt-1 text-lg font-bold text-emerald-700 tabular-nums dark:text-emerald-300">
                                                         {money(Number(p.price))}
                                                     </div>
                                                     <div
-                                                        className={`text-xs ${p.stock_quantity <= p.low_stock_threshold ? 'text-amber-300' : 'text-emerald-200/70'}`}
+                                                        className={`text-xs ${p.stock_quantity <= p.low_stock_threshold ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}`}
                                                     >
                                                         Stock:{' '}
                                                         {p.stock_quantity}
@@ -1111,7 +1248,7 @@ export default function CheckoutsIndex({
                                     <Label className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                                         Cart
                                     </Label>
-                                    <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-3 text-sm">
+                                    <div className={`min-h-0 flex-1 overflow-hidden ${posPanelClass} p-3 text-sm`}>
                                         <div className="max-h-40 space-y-2 overflow-y-auto lg:h-full lg:max-h-none">
                                             {addItemCart.length === 0 && (
                                                 <div className="px-2 py-1 text-sm text-muted-foreground italic">
@@ -1121,7 +1258,7 @@ export default function CheckoutsIndex({
                                             {addItemCart.map((item) => (
                                                 <div
                                                     key={item.productId}
-                                                    className="flex items-center justify-between gap-2 rounded-md bg-slate-900/70 px-2 py-1.5"
+                                                    className={posCartRowClass}
                                                 >
                                                     <div className="flex-1">
                                                         <div className="text-sm font-medium">
@@ -1189,6 +1326,134 @@ export default function CheckoutsIndex({
                                 </div>
                             </div>
                         </div>
+                    </DialogContent>
+                </Dialog>
+
+                <Dialog
+                    open={viewTabDetailsOpen}
+                    onOpenChange={(open) => {
+                        setViewTabDetailsOpen(open);
+                        if (!open) {
+                            setViewTabDetailsRow(null);
+                        }
+                    }}
+                >
+                    <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
+                        <DialogHeader>
+                            <DialogTitle>
+                                Tab details — #{viewTabDetailsRow?.id ?? ''}
+                            </DialogTitle>
+                            <DialogDescription>
+                                Read-only item list for this tab.
+                                {adminEnabled
+                                    ? ' Use Edit items to change quantities.'
+                                    : ' Only admins can edit items.'}
+                            </DialogDescription>
+                        </DialogHeader>
+                        {viewTabDetailsRow && (
+                            <div className="space-y-3 text-sm">
+                                {viewTabDetailsRow.table_sessions.map(
+                                    (session) => (
+                                        <div
+                                            key={`${viewTabDetailsRow.id}-${session.table_name}`}
+                                            className="rounded-md border border-border/70 p-3"
+                                        >
+                                            <div className="font-medium">
+                                                {session.table_name}
+                                            </div>
+                                            <div className="mt-1 text-xs text-muted-foreground">
+                                                Time{' '}
+                                                {money(session.time_total)} ·
+                                                Products{' '}
+                                                {money(session.products_total)}
+                                            </div>
+                                            {(session.items?.length ?? 0) ===
+                                            0 ? (
+                                                <p className="mt-2 text-xs text-muted-foreground">
+                                                    No products from this table.
+                                                </p>
+                                            ) : (
+                                                <ul className="mt-2 space-y-1">
+                                                    {session.items?.map(
+                                                        (item) => (
+                                                            <li
+                                                                key={item.id}
+                                                                className="flex justify-between gap-3"
+                                                            >
+                                                                <span>
+                                                                    {
+                                                                        item.quantity
+                                                                    }
+                                                                    ×{' '}
+                                                                    {item.product_name ??
+                                                                        'Item'}
+                                                                </span>
+                                                                <span className="tabular-nums">
+                                                                    {money(
+                                                                        item.total_price,
+                                                                    )}
+                                                                </span>
+                                                            </li>
+                                                        ),
+                                                    )}
+                                                </ul>
+                                            )}
+                                        </div>
+                                    ),
+                                )}
+                                <div className="rounded-md border border-border/70 p-3">
+                                    <div className="font-medium">
+                                        Tab products
+                                    </div>
+                                    {(viewTabDetailsRow.tab_items?.length ??
+                                        0) === 0 ? (
+                                        <p className="mt-2 text-xs text-muted-foreground">
+                                            No direct tab products.
+                                        </p>
+                                    ) : (
+                                        <ul className="mt-2 space-y-1">
+                                            {viewTabDetailsRow.tab_items?.map(
+                                                (item) => (
+                                                    <li
+                                                        key={item.id}
+                                                        className="flex justify-between gap-3"
+                                                    >
+                                                        <span>
+                                                            {item.quantity}×{' '}
+                                                            {item.product_name ??
+                                                                'Item'}
+                                                        </span>
+                                                        <span className="tabular-nums">
+                                                            {money(
+                                                                item.total_price,
+                                                            )}
+                                                        </span>
+                                                    </li>
+                                                ),
+                                            )}
+                                        </ul>
+                                    )}
+                                </div>
+                                <div className="flex justify-between border-t pt-2 font-medium">
+                                    <span>Total</span>
+                                    <span>
+                                        {money(
+                                            Number(
+                                                viewTabDetailsRow.grand_total,
+                                            ),
+                                        )}
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+                        <DialogFooter>
+                            <Button
+                                variant="outline"
+                                onClick={() => setViewTabDetailsOpen(false)}
+                            >
+                                Close
+                            </Button>
+                        </DialogFooter>
                     </DialogContent>
                 </Dialog>
 
@@ -1324,9 +1589,9 @@ export default function CheckoutsIndex({
                                 Pay tab — {summary?.table_name ?? 'Open tab'}
                             </DialogTitle>
                             <DialogDescription>
-                                Card and transfer cannot exceed the grand total
-                                together; use cash for tips or change. Change is
-                                taken from the cash portion.
+                                Enter any amount to record a partial payment, or
+                                cover the remaining balance to close the tab.
+                                Cash may exceed the remaining amount for change.
                             </DialogDescription>
                         </DialogHeader>
                         {summary && (
@@ -1382,186 +1647,83 @@ export default function CheckoutsIndex({
                                             {money(summary.items_total)}
                                         </span>
                                     </div>
-                                    <div className="flex justify-between font-semibold">
-                                        <span>Grand total</span>
+                                    <div className="flex justify-between">
+                                        <span className="text-muted-foreground">
+                                            Tab total
+                                        </span>
                                         <span>
                                             {money(summary.grand_total)}
                                         </span>
                                     </div>
-                                    {(() => {
-                                        const preview = paymentPreview(
-                                            parseFloat(cash) || 0,
-                                            parseFloat(card) || 0,
-                                            parseFloat(transfer) || 0,
-                                            Number(summary.grand_total) || 0,
-                                        );
-
-                                        if (
-                                            preview.cashValue <= 0 &&
-                                            preview.cardValue <= 0 &&
-                                            preview.transferValue <= 0
-                                        ) {
-                                            return null;
-                                        }
-
-                                        return (
-                                            <>
-                                                {preview.cardValue > 0 && (
-                                                    <div className="flex justify-between border-t border-border/60 pt-2">
-                                                        <span className="text-muted-foreground">
-                                                            Card
-                                                        </span>
-                                                        <span>
-                                                            {money(
-                                                                preview.cardValue,
-                                                            )}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                                {preview.transferValue > 0 && (
-                                                    <div className="flex justify-between">
-                                                        <span className="text-muted-foreground">
-                                                            Transfer
-                                                        </span>
-                                                        <span>
-                                                            {money(
-                                                                preview.transferValue,
-                                                            )}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                                {preview.cashValue > 0 && (
-                                                    <div className="flex justify-between">
-                                                        <span className="text-muted-foreground">
-                                                            Cash
-                                                        </span>
-                                                        <span>
-                                                            {money(
-                                                                preview.cashValue,
-                                                            )}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                                <div className="flex justify-between text-muted-foreground">
-                                                    <span>Total received</span>
-                                                    <span>
-                                                        {money(
-                                                            preview.totalPaid,
-                                                        )}
-                                                    </span>
-                                                </div>
-                                                {preview.change > 0.01 && (
-                                                    <div className="flex justify-between font-medium text-emerald-600 dark:text-emerald-400">
-                                                        <span>Change</span>
-                                                        <span>
-                                                            -{' '}
-                                                            {money(
-                                                                preview.change,
-                                                            )}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                            </>
-                                        );
-                                    })()}
-                                </div>
-                                <div className="grid gap-3">
-                                    <div className="flex items-center gap-2">
-                                        <Label className="w-24 shrink-0">
-                                            Cash
-                                        </Label>
-                                        <Input
-                                            type="number"
-                                            step="1"
-                                            min={0}
-                                            placeholder="0"
-                                            value={cash}
-                                            onChange={(e) => {
-                                                setCash(e.target.value);
-                                                setPayError(null);
-                                            }}
-                                        />
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <Label className="w-24 shrink-0">
-                                            Card
-                                        </Label>
-                                        <Input
-                                            type="number"
-                                            step="1"
-                                            min={0}
-                                            max={maxCardAmount}
-                                            placeholder="0"
-                                            title={`Max ${money(maxCardAmount)} (with current transfer)`}
-                                            value={card}
-                                            onChange={(e) => {
-                                                setPayError(null);
-                                                setCard(
-                                                    clampNonCashInput(
-                                                        e.target.value,
-                                                        maxCardAmount,
+                                    {Number(summary.amount_paid ?? 0) > 0.01 && (
+                                        <div className="flex justify-between text-emerald-700 dark:text-emerald-400">
+                                            <span>Paid so far</span>
+                                            <span>
+                                                {money(
+                                                    Number(
+                                                        summary.amount_paid ?? 0,
                                                     ),
-                                                );
-                                            }}
-                                        />
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <Label className="w-24 shrink-0">
-                                            Transfer
-                                        </Label>
-                                        <Input
-                                            type="number"
-                                            step="1"
-                                            min={0}
-                                            max={maxTransferAmount}
-                                            placeholder="0"
-                                            title={`Max ${money(maxTransferAmount)} (with current card)`}
-                                            value={transfer}
-                                            onChange={(e) => {
-                                                setPayError(null);
-                                                setTransfer(
-                                                    clampNonCashInput(
-                                                        e.target.value,
-                                                        maxTransferAmount,
-                                                    ),
-                                                );
-                                            }}
-                                        />
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <Label className="w-24 shrink-0">
-                                            Email (optional)
-                                        </Label>
-                                        <Input
-                                            type="email"
-                                            placeholder="customer@example.com"
-                                            value={customerEmail}
-                                            onChange={(e) =>
-                                                setCustomerEmail(e.target.value)
-                                            }
-                                        />
+                                                )}
+                                            </span>
+                                        </div>
+                                    )}
+                                    <div className="flex justify-between font-semibold">
+                                        <span>Remaining</span>
+                                        <span>{money(payRemaining)}</span>
                                     </div>
                                 </div>
+                                <PaymentForm
+                                    total={payRemaining}
+                                    totalHint={`Remaining ${money(payRemaining)}`}
+                                    cash={cash}
+                                    card={card}
+                                    transfer={transfer}
+                                    email={customerEmail}
+                                    onCashChange={(value) => {
+                                        setCash(value);
+                                        setPayError(null);
+                                    }}
+                                    onCardChange={(value) => {
+                                        setCard(value);
+                                        setPayError(null);
+                                    }}
+                                    onTransferChange={(value) => {
+                                        setTransfer(value);
+                                        setPayError(null);
+                                    }}
+                                    onEmailChange={setCustomerEmail}
+                                />
                                 {payError && (
                                     <p className="text-sm text-destructive">
                                         {payError}
                                     </p>
                                 )}
-                                <DialogFooter>
+                                <DialogFooter className="flex-col gap-2 sm:flex-col">
                                     <Button
-                                        variant="outline"
+                                        className="h-11 w-full"
+                                        onClick={handlePayComplete}
+                                        disabled={
+                                            submitting ||
+                                            payPreview.totalPaid <= 0.01
+                                        }
+                                    >
+                                        {submitting
+                                            ? payCloses
+                                                ? 'Completing…'
+                                                : 'Recording…'
+                                            : payCloses
+                                              ? `Close tab · ${money(payRemaining)}`
+                                              : payPreview.totalPaid > 0.01
+                                                ? `Record partial · ${money(payApplied)}`
+                                                : 'Enter a payment amount'}
+                                    </Button>
+                                    <Button
+                                        variant="ghost"
+                                        className="w-full"
                                         onClick={closePayModal}
                                         disabled={submitting}
                                     >
                                         Cancel
-                                    </Button>
-                                    <Button
-                                        onClick={handlePayComplete}
-                                        disabled={submitting}
-                                    >
-                                        {submitting
-                                            ? 'Completing…'
-                                            : 'Complete payment'}
                                     </Button>
                                 </DialogFooter>
                             </>

@@ -26,14 +26,15 @@ class TableController extends Controller
 {
     public function index(): Response
     {
-        $tables = BilliardTable::with(['latestGameSession.items'])->orderBy('id')->get()
+        $tables = BilliardTable::query()->orderBy('id')->get()
             ->map(function (BilliardTable $table) {
-                $currentSession = $table->latestGameSession;
+                $currentSession = $table->latestActiveSession(['items']);
 
                 $elapsed = null;
                 $elapsedSeconds = null;
                 $lastResumeAt = null;
                 $sessionItems = [];
+                $alertAtPlayedSeconds = null;
 
                 if ($currentSession?->isActive()) {
                     $playedSeconds = $currentSession->playedSeconds();
@@ -52,6 +53,8 @@ class TableController extends Controller
                         'unit_price' => (float) $item->unit_price,
                         'total_price' => (float) $item->total_price,
                     ])->all();
+
+                    $alertAtPlayedSeconds = $currentSession->alert_at_played_seconds;
                 }
 
                 return [
@@ -66,6 +69,8 @@ class TableController extends Controller
                         'last_resume_at' => $lastResumeAt,
                         'ended_at' => $currentSession->ended_at,
                         'time_total' => $currentSession->time_total,
+                        'alert_at_played_seconds' => $alertAtPlayedSeconds,
+                        'has_alert' => $currentSession->hasAlert(),
                         'items' => $sessionItems,
                     ] : null,
                 ];
@@ -83,6 +88,7 @@ class TableController extends Controller
             'products' => Product::where('is_active', true)
                 ->orderBy('name')
                 ->get(['id', 'name', 'price', 'category', 'stock_quantity', 'low_stock_threshold']),
+            'timeBlocks' => TableTimeBilling::blocks(),
             'receipt' => $receipt,
             'isAdmin' => $isAdmin,
         ]);
@@ -117,7 +123,7 @@ class TableController extends Controller
     public function pause(BilliardTable $table)
     {
         return PosTransaction::table($table, function (BilliardTable $table) {
-            $session = $table->sessions()->latest()->first();
+            $session = $table->latestActiveSession();
 
             if (! $session || $session->status !== 'running') {
                 throw ValidationException::withMessages(['table' => 'No running session to pause.']);
@@ -140,19 +146,58 @@ class TableController extends Controller
     public function resume(BilliardTable $table)
     {
         return PosTransaction::table($table, function (BilliardTable $table) {
-            $session = $table->sessions()->latest()->first();
+            $session = $table->latestActiveSession();
 
             if (! $session || $session->status !== 'paused') {
                 throw ValidationException::withMessages(['table' => 'No paused session to resume.']);
             }
 
+            $now = now('UTC');
             $session->update([
                 'status' => 'running',
                 'paused_at' => null,
-                'last_resume_at' => now('UTC'),
+                'last_resume_at' => $now,
             ]);
 
             $table->update(['status' => 'running']);
+
+            return redirect()->back();
+        });
+    }
+
+    public function setAlert(Request $request, BilliardTable $table)
+    {
+        return PosTransaction::table($table, function (BilliardTable $table) use ($request) {
+            $session = $table->latestActiveSession();
+
+            if (! $session) {
+                throw ValidationException::withMessages(['table' => 'No active session for this table.']);
+            }
+
+            $parsed = TableTimeBilling::parseOrFail($request->input('time_blocks'));
+            if ($parsed['total_minutes'] <= 0) {
+                throw ValidationException::withMessages(['time_blocks' => 'Select at least one time block for the alert.']);
+            }
+
+            $extend = $request->boolean('extend');
+            $session->setAlertFromBlocks($parsed['counts'], $extend);
+            $session->save();
+
+            return redirect()->back();
+        });
+    }
+
+    public function clearAlert(BilliardTable $table)
+    {
+        return PosTransaction::table($table, function (BilliardTable $table) {
+            $session = $table->latestActiveSession();
+
+            if (! $session) {
+                throw ValidationException::withMessages(['table' => 'No active session for this table.']);
+            }
+
+            $session->clearAlert();
+            $session->save();
 
             return redirect()->back();
         });
@@ -167,17 +212,17 @@ class TableController extends Controller
         }
 
         $playedSeconds = $session->playedSeconds();
-        $timeTotal = TableTimeBilling::totalForSeconds($playedSeconds);
         $itemsTotal = (float) $session->items->sum('total_price');
-        $grandTotal = round(max(0, $timeTotal + $itemsTotal), 2);
 
         return response()->json([
             'table_id' => $table->id,
             'table_name' => $table->name,
             'session_id' => $session->id,
-            'time_total' => $timeTotal,
+            'played_seconds' => $playedSeconds,
+            'time_total' => 0,
             'items_total' => $itemsTotal,
-            'grand_total' => $grandTotal,
+            'grand_total' => round(max(0, $itemsTotal), 2),
+            'time_blocks' => TableTimeBilling::blocks(),
         ]);
     }
 
@@ -190,9 +235,10 @@ class TableController extends Controller
                 throw ValidationException::withMessages(['table' => 'No active session to end.']);
             }
 
+            $blocks = TableTimeBilling::parseOrFail($request->input('time_blocks'));
             $endedAt = now('UTC');
             $playedSeconds = $session->playedSeconds($endedAt);
-            $timeTotal = TableTimeBilling::totalForSeconds($playedSeconds);
+            $timeTotal = $blocks['time_total'];
             $itemsTotal = (float) $session->items->sum('total_price');
             $grandTotal = round(max(0, $timeTotal + $itemsTotal), 2);
 
@@ -216,15 +262,16 @@ class TableController extends Controller
 
             $receiptId = null;
 
-            $timeMinutes = (int) round($playedSeconds / 60);
-
-            DB::transaction(function () use ($session, $table, $endedAt, $timeMinutes, $timeTotal, $itemsTotal, $grandTotal, $validPayments, $customerEmail, $playedSeconds, &$receiptId) {
+            DB::transaction(function () use ($session, $table, $endedAt, $blocks, $timeTotal, $itemsTotal, $grandTotal, $validPayments, $customerEmail, $playedSeconds, &$receiptId) {
+                $session->clearAlert();
                 $session->update([
                     'status' => 'completed',
                     'ended_at' => $endedAt,
                     'total_played_seconds' => $playedSeconds,
-                    'total_minutes' => $timeMinutes,
+                    'total_minutes' => $blocks['total_minutes'],
                     'time_total' => $timeTotal,
+                    'time_blocks' => $blocks['counts'],
+                    'alert_at_played_seconds' => null,
                 ]);
 
                 $table->update(['status' => 'available']);
@@ -268,27 +315,30 @@ class TableController extends Controller
                 throw ValidationException::withMessages(['table' => 'No active session to move.']);
             }
 
+            $blocks = TableTimeBilling::parseOrFail($request->input('time_blocks'));
             $checkoutId = $request->input('checkout_session_id');
 
             $endedAt = now('UTC');
             $playedSeconds = $session->playedSeconds($endedAt);
-            $timeTotal = TableTimeBilling::totalForSeconds($playedSeconds);
+            $timeTotal = $blocks['time_total'];
 
-            DB::transaction(function () use ($session, $table, $endedAt, $playedSeconds, $timeTotal, $checkoutId) {
+            DB::transaction(function () use ($session, $table, $endedAt, $playedSeconds, $timeTotal, $blocks, $checkoutId) {
                 if ($checkoutId) {
                     $checkout = CheckoutSession::query()->lockForUpdate()->open()->findOrFail($checkoutId);
                 } else {
                     $checkout = CheckoutSession::create(['status' => CheckoutSession::STATUS_OPEN]);
                 }
 
-                $timeMinutes = (int) round($playedSeconds / 60);
+                $session->clearAlert();
                 $session->update([
                     'checkout_session_id' => $checkout->id,
                     'status' => 'completed',
                     'ended_at' => $endedAt,
                     'total_played_seconds' => $playedSeconds,
-                    'total_minutes' => $timeMinutes,
+                    'total_minutes' => $blocks['total_minutes'],
                     'time_total' => $timeTotal,
+                    'time_blocks' => $blocks['counts'],
+                    'alert_at_played_seconds' => null,
                 ]);
                 $table->update(['status' => 'available']);
             });

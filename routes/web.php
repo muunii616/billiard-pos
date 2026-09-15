@@ -12,6 +12,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\OverviewController;
 use App\Http\Controllers\ReceiptController;
 use App\Http\Controllers\RegisterController;
+use App\Http\Controllers\StockController;
 use App\Http\Controllers\TableController;
 use Illuminate\Support\Facades\Route;
 
@@ -24,6 +25,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('overview/download', [OverviewController::class, 'download'])->name('overview.download');
     Route::get('cash-register', RegisterController::class)->name('cash-register.index');
     Route::get('admin/products', [AdminProductController::class, 'index'])->name('admin.products.index');
+    Route::get('stock', [StockController::class, 'index'])->name('stock.index');
     Route::post('admin/products/stock', [AdminProductController::class, 'adjustStock'])->name('admin.products.stock');
     Route::post('admin/products/external-use', [AdminProductController::class, 'recordExternalUse'])->name('admin.products.external-use');
 
@@ -31,6 +33,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('tables/{table}/start', [TableController::class, 'start'])->name('tables.start');
     Route::post('tables/{table}/pause', [TableController::class, 'pause'])->name('tables.pause');
     Route::post('tables/{table}/resume', [TableController::class, 'resume'])->name('tables.resume');
+    Route::post('tables/{table}/alert', [TableController::class, 'setAlert'])->name('tables.alert.set');
+    Route::post('tables/{table}/alert/clear', [TableController::class, 'clearAlert'])->name('tables.alert.clear');
     Route::get('tables/{table}/checkout-summary', [TableController::class, 'checkoutSummary'])->name('tables.checkout-summary');
     Route::post('tables/{table}/end', [TableController::class, 'end'])->name('tables.end');
     Route::post('tables/{table}/move-to-checkout', [TableController::class, 'moveToCheckout'])->name('tables.move-to-checkout');

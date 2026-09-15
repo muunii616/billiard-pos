@@ -41,8 +41,16 @@ class BilliardTable extends Model
 
     public function latestActiveSession(array $with = []): ?GameSession
     {
-        $session = $this->latestSession($with);
+        // Look up any running/paused session — not only when the newest row is active.
+        // Older "ghost" sessions can otherwise block Start while Cancel thinks nothing is open.
+        $query = $this->sessions()
+            ->whereIn('status', GameSession::ACTIVE_STATUSES)
+            ->latest('id');
 
-        return $session?->isActive() ? $session : null;
+        if (! empty($with)) {
+            $query->with($with);
+        }
+
+        return $query->first();
     }
 }

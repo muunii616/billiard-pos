@@ -54,7 +54,21 @@ class DemoSalesSeeder extends Seeder
 
             foreach ($this->salesDates() as $index => $paidAt) {
                 $minutes = 40 + (($index * 13) % 81);
-                $timeTotal = TableTimeBilling::totalForSeconds($minutes * 60);
+                $hourBlocks = intdiv($minutes, 60);
+                $remainder = $minutes % 60;
+                $thirtyBlocks = intdiv($remainder, 30);
+                $remainder %= 30;
+                $fifteenBlocks = (int) ceil($remainder / 15);
+                $counts = TableTimeBilling::normalizeCounts([
+                    '60' => $hourBlocks,
+                    '30' => $thirtyBlocks,
+                    '15' => $fifteenBlocks,
+                ]);
+                if ($counts === []) {
+                    $counts = ['15' => 1];
+                }
+                $timeTotal = TableTimeBilling::totalForBlocks($counts);
+                $billedMinutes = TableTimeBilling::totalMinutesForBlocks($counts);
                 $table = $tables[$index % $tables->count()];
 
                 $session = GameSession::query()->create([
@@ -65,8 +79,9 @@ class DemoSalesSeeder extends Seeder
                     'last_resume_at' => null,
                     'total_played_seconds' => $minutes * 60,
                     'ended_at' => $paidAt,
-                    'total_minutes' => $minutes,
+                    'total_minutes' => $billedMinutes,
                     'time_total' => $timeTotal,
+                    'time_blocks' => $counts,
                 ]);
 
                 $itemNames = $index % 3 === 0

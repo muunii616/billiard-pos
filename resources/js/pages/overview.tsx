@@ -1,6 +1,6 @@
 import { Head, router, usePage } from '@inertiajs/react';
 import { CalendarDays, Download } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
     Bar,
     BarChart,
@@ -10,14 +10,14 @@ import {
     PieChart,
     XAxis,
 } from 'recharts';
+import { PageHeader } from '@/components/page-header';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import type { ChartConfig } from '@/components/ui/chart';
 import {
     ChartContainer,
-    ChartLegend,
-    ChartLegendContent,
     ChartTooltip,
     ChartTooltipContent,
 } from '@/components/ui/chart';
@@ -56,8 +56,7 @@ import {
 import AppLayout from '@/layouts/app-layout';
 import { formatDateTime, businessYear, POS_TIME_ZONE } from '@/lib/dates';
 import { jsonHeaders } from '@/lib/http';
-import { formatMoney } from '@/lib/payments';
-import type { BreadcrumbItem } from '@/types';
+import { formatMoney, formatPaymentMethod } from '@/lib/payments';
 
 type Summary = {
     total_revenue: number;
@@ -91,16 +90,33 @@ type Props = {
         cancelled_at: string | null;
         cancelled_by: string;
         reason: string | null;
+        played_seconds: number;
+        stock_restored: boolean | null;
+        items: {
+            product_name: string;
+            quantity: number;
+            unit_price: number;
+            line_total: number;
+        }[];
+    }[];
+    voided_tabs?: {
+        id: number;
+        voided_at: string | null;
+        voided_by: string;
+        reason: string | null;
+        table_names: string[];
+        stock_restored: boolean | null;
+        time_total: number;
+        items: {
+            source: string;
+            product_name: string;
+            quantity: number;
+            unit_price: number;
+            line_total: number;
+        }[];
     }[];
     selected_year: number;
 };
-
-const breadcrumbs: BreadcrumbItem[] = [
-    {
-        title: 'Overview',
-        href: '/overview',
-    },
-];
 
 type AdminReceipt = {
     id: number;
@@ -152,8 +168,11 @@ export default function Overview({
     charts,
     invoices,
     cancelled_sessions,
+    voided_tabs = [],
     selected_year,
 }: Props) {
+    const INVOICES_PER_PAGE = 15;
+    const [invoicePage, setInvoicePage] = useState(1);
     const [calendarOpen, setCalendarOpen] = useState(false);
     const [downloadOpen, setDownloadOpen] = useState(false);
     const [downloadPeriod, setDownloadPeriod] = useState<
@@ -372,19 +391,18 @@ export default function Overview({
         'Dec',
     ];
     const salesColorMap: Record<string, string> = {
-        'Table time': '#3b82f6',
-        Snacks: '#f59e0b',
-        Drinks: '#10b981',
-        Sets: '#8b5cf6',
-        Other: '#ef4444',
+        'Table time': 'var(--chart-1)',
+        Snacks: 'var(--chart-3)',
+        Drinks: 'var(--chart-2)',
+        Sets: 'var(--chart-4)',
+        Other: 'var(--chart-5)',
     };
     const paymentPalette = [
-        '#06b6d4',
-        '#22c55e',
-        '#f97316',
-        '#eab308',
-        '#ec4899',
-        '#6366f1',
+        'var(--chart-1)',
+        'var(--chart-2)',
+        'var(--chart-3)',
+        'var(--chart-4)',
+        'var(--chart-5)',
     ];
 
     const parseIsoDate = (value: string) => {
@@ -460,6 +478,25 @@ export default function Overview({
         (sum, row) => sum + (Number(row.amount) || 0),
         0,
     );
+    const invoicePageCount = Math.max(
+        1,
+        Math.ceil(invoices.length / INVOICES_PER_PAGE),
+    );
+    const pagedInvoices = useMemo(() => {
+        const start = (invoicePage - 1) * INVOICES_PER_PAGE;
+
+        return invoices.slice(start, start + INVOICES_PER_PAGE);
+    }, [INVOICES_PER_PAGE, invoicePage, invoices]);
+
+    useEffect(() => {
+        setInvoicePage(1);
+    }, [date, month, mode, invoices.length]);
+
+    useEffect(() => {
+        if (invoicePage > invoicePageCount) {
+            setInvoicePage(invoicePageCount);
+        }
+    }, [invoicePage, invoicePageCount]);
     const formatCancelledAt = (value: string | null) => {
         if (!value) {
             return '—';
@@ -470,6 +507,25 @@ export default function Overview({
             hour: '2-digit',
             minute: '2-digit',
         });
+    };
+    const formatPlayed = (seconds: number) => {
+        const s = Math.max(0, Math.floor(seconds || 0));
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        const sec = s % 60;
+        const pad = (n: number) => n.toString().padStart(2, '0');
+
+        return `${pad(h)}:${pad(m)}:${pad(sec)}`;
+    };
+    const stockLabel = (restored: boolean | null) => {
+        if (restored === true) {
+            return 'Restocked';
+        }
+        if (restored === false) {
+            return 'Not restocked';
+        }
+
+        return '—';
     };
     const moneyTooltipFormatter = (value: unknown, name: unknown) => (
         <div className="flex w-full items-center justify-between gap-3">
@@ -501,7 +557,7 @@ export default function Overview({
         ]),
     );
     const incomeChartConfig: ChartConfig = {
-        income: { label: 'Income', color: '#22c55e' },
+        income: { label: 'Income', color: 'var(--chart-1)' },
     };
 
     const handleMonthlyPick = (monthIndex: number) => {
@@ -522,9 +578,10 @@ export default function Overview({
     };
 
     return (
-        <AppLayout breadcrumbs={breadcrumbs}>
+        <AppLayout breadcrumbs={[]}>
             <Head title="Overview" />
             <div className="flex flex-1 flex-col gap-4 rounded-xl p-4">
+                <PageHeader title="Overview" description="Sales, payments, and receipts.">
                 <div className="flex flex-wrap items-center gap-3">
                     <div className="inline-flex rounded-lg border border-sidebar-border/70 p-1 dark:border-sidebar-border">
                         <Button
@@ -649,6 +706,7 @@ export default function Overview({
                         <Download className="h-4 w-4" /> Download
                     </Button>
                 </div>
+                </PageHeader>
 
                 <Dialog
                     open={downloadOpen}
@@ -797,7 +855,7 @@ export default function Overview({
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="px-4">
-                            <div className="text-2xl font-semibold">
+                            <div className="text-3xl font-semibold tabular-nums">
                                 {money(Number(summary.total_revenue) || 0)}
                             </div>
                         </CardContent>
@@ -809,7 +867,7 @@ export default function Overview({
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="px-4">
-                            <div className="text-2xl font-semibold">
+                            <div className="text-3xl font-semibold tabular-nums">
                                 {summary.sessions_count}
                             </div>
                         </CardContent>
@@ -821,7 +879,7 @@ export default function Overview({
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="px-4">
-                            <div className="text-2xl font-semibold">
+                            <div className="text-3xl font-semibold tabular-nums">
                                 {summary.receipts_count}
                             </div>
                         </CardContent>
@@ -837,13 +895,14 @@ export default function Overview({
                         </CardHeader>
                         <CardContent className="px-4">
                             {salesData.length === 0 ? (
-                                <div className="text-sm text-muted-foreground">
-                                    No sales data for this period.
-                                </div>
+                                <p className="py-8 text-center text-sm text-muted-foreground">
+                                    No sales this period.
+                                </p>
                             ) : (
+                                <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center">
                                 <ChartContainer
                                     config={salesChartConfig}
-                                    className="mx-auto aspect-square h-[280px]"
+                                    className="mx-auto aspect-auto h-[200px] w-[200px]"
                                 >
                                     <PieChart>
                                         <ChartTooltip
@@ -860,7 +919,8 @@ export default function Overview({
                                             data={salesData}
                                             dataKey="value"
                                             nameKey="name"
-                                            outerRadius={95}
+                                            innerRadius={48}
+                                            outerRadius={80}
                                         >
                                             {salesData.map((item, index) => (
                                                 <Cell
@@ -877,11 +937,48 @@ export default function Overview({
                                                 />
                                             ))}
                                         </Pie>
-                                        <ChartLegend
-                                            content={<ChartLegendContent />}
-                                        />
                                     </PieChart>
                                 </ChartContainer>
+                                <ul className="space-y-2 text-sm">
+                                    {salesData.map((item, index) => {
+                                        const total = salesData.reduce(
+                                            (sum, row) => sum + row.value,
+                                            0,
+                                        );
+                                        const color =
+                                            salesColorMap[item.name] ??
+                                            paymentPalette[
+                                                index % paymentPalette.length
+                                            ];
+
+                                        return (
+                                            <li
+                                                key={item.name}
+                                                className="flex items-center justify-between gap-3"
+                                            >
+                                                <span className="flex items-center gap-2">
+                                                    <span
+                                                        className="h-2.5 w-2.5 rounded-full"
+                                                        style={{
+                                                            backgroundColor:
+                                                                color,
+                                                        }}
+                                                    />
+                                                    {item.name}
+                                                </span>
+                                                <span className="tabular-nums text-muted-foreground">
+                                                    {money(item.value)} (
+                                                    {Math.round(
+                                                        (item.value / total) *
+                                                            100,
+                                                    )}
+                                                    %)
+                                                </span>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                                </div>
                             )}
                         </CardContent>
                     </Card>
@@ -894,13 +991,14 @@ export default function Overview({
                         </CardHeader>
                         <CardContent className="px-4">
                             {paymentData.length === 0 ? (
-                                <div className="text-sm text-muted-foreground">
-                                    No payment data for this period.
-                                </div>
+                                <p className="py-8 text-center text-sm text-muted-foreground">
+                                    No payments this period.
+                                </p>
                             ) : (
+                                <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center">
                                 <ChartContainer
                                     config={paymentsChartConfig}
-                                    className="mx-auto aspect-square h-[280px]"
+                                    className="mx-auto aspect-auto h-[200px] w-[200px]"
                                 >
                                     <PieChart>
                                         <ChartTooltip
@@ -917,7 +1015,8 @@ export default function Overview({
                                             data={paymentData}
                                             dataKey="value"
                                             nameKey="name"
-                                            outerRadius={95}
+                                            innerRadius={48}
+                                            outerRadius={80}
                                         >
                                             {paymentData.map((item, index) => (
                                                 <Cell
@@ -931,11 +1030,46 @@ export default function Overview({
                                                 />
                                             ))}
                                         </Pie>
-                                        <ChartLegend
-                                            content={<ChartLegendContent />}
-                                        />
                                     </PieChart>
                                 </ChartContainer>
+                                <ul className="space-y-2 text-sm">
+                                    {paymentData.map((item, index) => {
+                                        const total = paymentData.reduce(
+                                            (sum, row) => sum + row.value,
+                                            0,
+                                        );
+
+                                        return (
+                                            <li
+                                                key={item.name}
+                                                className="flex items-center justify-between gap-3"
+                                            >
+                                                <span className="flex items-center gap-2">
+                                                    <span
+                                                        className="h-2.5 w-2.5 rounded-full"
+                                                        style={{
+                                                            backgroundColor:
+                                                                paymentPalette[
+                                                                    index %
+                                                                        paymentPalette.length
+                                                                ],
+                                                        }}
+                                                    />
+                                                    {item.name}
+                                                </span>
+                                                <span className="tabular-nums text-muted-foreground">
+                                                    {money(item.value)} (
+                                                    {Math.round(
+                                                        (item.value / total) *
+                                                            100,
+                                                    )}
+                                                    %)
+                                                </span>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                                </div>
                             )}
                         </CardContent>
                     </Card>
@@ -1038,7 +1172,7 @@ export default function Overview({
                                         </TableCell>
                                     </TableRow>
                                 )}
-                                {invoices.map((row) => (
+                                {pagedInvoices.map((row) => (
                                     <TableRow
                                         key={row.invoice}
                                         className="cursor-pointer"
@@ -1056,9 +1190,24 @@ export default function Overview({
                                                     : '—'}
                                             </div>
                                         </TableCell>
-                                        <TableCell>{row.status}</TableCell>
+                                        <TableCell>
+                                            <Badge
+                                                variant={
+                                                    row.status.toLowerCase() ===
+                                                    'paid'
+                                                        ? 'secondary'
+                                                        : row.status.toLowerCase() ===
+                                                            'voided'
+                                                          ? 'destructive'
+                                                          : 'outline'
+                                                }
+                                                className="capitalize"
+                                            >
+                                                {row.status}
+                                            </Badge>
+                                        </TableCell>
                                         <TableCell>{row.method}</TableCell>
-                                        <TableCell className="text-right">
+                                        <TableCell className="text-right font-semibold tabular-nums">
                                             {money(Number(row.amount) || 0)}
                                         </TableCell>
                                         {adminEnabled && (
@@ -1080,10 +1229,16 @@ export default function Overview({
                             </TableBody>
                             <TableFooter>
                                 <TableRow>
-                                    <TableCell colSpan={3}>Total</TableCell>
+                                    <TableCell colSpan={3}>
+                                        Period total
+                                        {invoices.length > INVOICES_PER_PAGE
+                                            ? ` · ${invoices.length} invoices`
+                                            : ''}
+                                    </TableCell>
                                     <TableCell className="text-right">
                                         {money(invoicesTotal)}
                                     </TableCell>
+                                    {adminEnabled && <TableCell />}
                                 </TableRow>
                             </TableFooter>
                             <TableCaption>
@@ -1092,6 +1247,48 @@ export default function Overview({
                                     : 'Invoices for the selected month, newest to oldest.'}
                             </TableCaption>
                         </Table>
+                        {invoices.length > INVOICES_PER_PAGE && (
+                            <div className="mt-3 flex items-center justify-between gap-2">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={invoicePage <= 1}
+                                    onClick={() =>
+                                        setInvoicePage((page) =>
+                                            Math.max(1, page - 1),
+                                        )
+                                    }
+                                >
+                                    Previous
+                                </Button>
+                                <span className="text-xs text-muted-foreground">
+                                    Page {invoicePage} of {invoicePageCount}
+                                    <span className="mx-1">·</span>
+                                    {(invoicePage - 1) * INVOICES_PER_PAGE + 1}
+                                    –
+                                    {Math.min(
+                                        invoicePage * INVOICES_PER_PAGE,
+                                        invoices.length,
+                                    )}{' '}
+                                    of {invoices.length}
+                                </span>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={invoicePage >= invoicePageCount}
+                                    onClick={() =>
+                                        setInvoicePage((page) =>
+                                            Math.min(
+                                                invoicePageCount,
+                                                page + 1,
+                                            ),
+                                        )
+                                    }
+                                >
+                                    Next
+                                </Button>
+                            </div>
+                        )}
                     </CardContent>
                 </Card>
 
@@ -1107,6 +1304,9 @@ export default function Overview({
                                 <TableRow>
                                     <TableHead>Time</TableHead>
                                     <TableHead>Table</TableHead>
+                                    <TableHead>Played</TableHead>
+                                    <TableHead>Items</TableHead>
+                                    <TableHead>Stock</TableHead>
                                     <TableHead>Cancelled by</TableHead>
                                     <TableHead>Reason</TableHead>
                                 </TableRow>
@@ -1115,7 +1315,7 @@ export default function Overview({
                                 {cancelled_sessions.length === 0 && (
                                     <TableRow>
                                         <TableCell
-                                            colSpan={4}
+                                            colSpan={7}
                                             className="text-muted-foreground"
                                         >
                                             No cancelled sessions for this
@@ -1133,6 +1333,46 @@ export default function Overview({
                                         <TableCell className="font-medium">
                                             {session.table_name}
                                         </TableCell>
+                                        <TableCell className="font-mono text-xs tabular-nums">
+                                            {formatPlayed(
+                                                session.played_seconds ?? 0,
+                                            )}
+                                        </TableCell>
+                                        <TableCell className="max-w-xs">
+                                            {(session.items?.length ?? 0) ===
+                                            0 ? (
+                                                <span className="text-muted-foreground">
+                                                    No items
+                                                </span>
+                                            ) : (
+                                                <ul className="space-y-0.5 text-xs">
+                                                    {session.items.map(
+                                                        (item, index) => (
+                                                            <li
+                                                                key={`${session.id}-${index}`}
+                                                            >
+                                                                {item.quantity}×{' '}
+                                                                {
+                                                                    item.product_name
+                                                                }{' '}
+                                                                <span className="text-muted-foreground">
+                                                                    (
+                                                                    {money(
+                                                                        item.line_total,
+                                                                    )}
+                                                                    )
+                                                                </span>
+                                                            </li>
+                                                        ),
+                                                    )}
+                                                </ul>
+                                            )}
+                                        </TableCell>
+                                        <TableCell className="text-xs">
+                                            {stockLabel(
+                                                session.stock_restored ?? null,
+                                            )}
+                                        </TableCell>
                                         <TableCell>
                                             {session.cancelled_by}
                                         </TableCell>
@@ -1147,8 +1387,116 @@ export default function Overview({
                                 ))}
                             </TableBody>
                             <TableCaption>
-                                Cancelled active sessions are kept separate from
-                                paid receipts.
+                                Cancelled active table sessions for this period.
+                            </TableCaption>
+                        </Table>
+                    </CardContent>
+                </Card>
+
+                <Card className="border-sidebar-border/70 bg-background py-4 dark:border-sidebar-border">
+                    <CardHeader className="px-4 pb-0">
+                        <CardTitle className="text-sm font-semibold">
+                            Deleted / voided tabs
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="px-4">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Time</TableHead>
+                                    <TableHead>Tab</TableHead>
+                                    <TableHead>Tables</TableHead>
+                                    <TableHead>Items</TableHead>
+                                    <TableHead>Stock</TableHead>
+                                    <TableHead>Deleted by</TableHead>
+                                    <TableHead>Reason</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {voided_tabs.length === 0 && (
+                                    <TableRow>
+                                        <TableCell
+                                            colSpan={7}
+                                            className="text-muted-foreground"
+                                        >
+                                            No deleted tabs for this period.
+                                        </TableCell>
+                                    </TableRow>
+                                )}
+                                {voided_tabs.map((tab) => (
+                                    <TableRow key={tab.id}>
+                                        <TableCell className="whitespace-nowrap">
+                                            {formatCancelledAt(tab.voided_at)}
+                                        </TableCell>
+                                        <TableCell className="font-medium">
+                                            #{tab.id}
+                                            {tab.time_total > 0 ? (
+                                                <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+                                                    Time {money(tab.time_total)}
+                                                </span>
+                                            ) : null}
+                                        </TableCell>
+                                        <TableCell>
+                                            {tab.table_names.length
+                                                ? tab.table_names.join(', ')
+                                                : '—'}
+                                        </TableCell>
+                                        <TableCell className="max-w-xs">
+                                            {tab.items.length === 0 ? (
+                                                <span className="text-muted-foreground">
+                                                    No items
+                                                </span>
+                                            ) : (
+                                                <ul className="space-y-0.5 text-xs">
+                                                    {tab.items.map(
+                                                        (item, index) => (
+                                                            <li
+                                                                key={`${tab.id}-${index}`}
+                                                            >
+                                                                {item.quantity}×{' '}
+                                                                {
+                                                                    item.product_name
+                                                                }
+                                                                {item.source !==
+                                                                'tab' ? (
+                                                                    <span className="text-muted-foreground">
+                                                                        {' '}
+                                                                        (
+                                                                        {
+                                                                            item.source
+                                                                        }
+                                                                        )
+                                                                    </span>
+                                                                ) : null}{' '}
+                                                                <span className="text-muted-foreground">
+                                                                    (
+                                                                    {money(
+                                                                        item.line_total,
+                                                                    )}
+                                                                    )
+                                                                </span>
+                                                            </li>
+                                                        ),
+                                                    )}
+                                                </ul>
+                                            )}
+                                        </TableCell>
+                                        <TableCell className="text-xs">
+                                            {stockLabel(tab.stock_restored)}
+                                        </TableCell>
+                                        <TableCell>{tab.voided_by}</TableCell>
+                                        <TableCell className="max-w-md">
+                                            {tab.reason || (
+                                                <span className="text-muted-foreground">
+                                                    No reason provided
+                                                </span>
+                                            )}
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                            <TableCaption>
+                                Open tabs that were deleted without payment.
                             </TableCaption>
                         </Table>
                     </CardContent>
@@ -1309,8 +1657,17 @@ export default function Overview({
                                             >
                                                 <div className="flex justify-between gap-3">
                                                     <span>
-                                                        {item.description} ×{' '}
-                                                        {item.quantity}
+                                                        {item.type === 'time'
+                                                            ? item.description
+                                                                  .replace(
+                                                                      /^Table\s+(?=Table\b)/i,
+                                                                      '',
+                                                                  )
+                                                                  .replace(
+                                                                      /\s+[—-]\s+time$/i,
+                                                                      '',
+                                                                  )
+                                                            : `${item.description} × ${item.quantity}`}
                                                     </span>
                                                     <span className="font-medium">
                                                         {money(item.subtotal)}
@@ -1353,7 +1710,9 @@ export default function Overview({
                                         className="flex justify-between py-1"
                                     >
                                         <span>
-                                            {payment.method.replace('_', ' ')}
+                                            {formatPaymentMethod(
+                                                payment.method,
+                                            )}
                                         </span>
                                         <span>{money(payment.amount)}</span>
                                     </div>

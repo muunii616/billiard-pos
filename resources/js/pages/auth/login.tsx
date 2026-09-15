@@ -22,7 +22,7 @@ export default function Login({ status, canResetPassword }: Props) {
             title="Log in"
             description="Enter your email and password to access the POS"
         >
-            <Head title="Log in - Billiard POS" />
+            <Head title="Log in" />
 
             <Form
                 {...store.form()}

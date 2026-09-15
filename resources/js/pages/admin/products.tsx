@@ -1,8 +1,20 @@
-import { Head, router, useForm } from '@inertiajs/react';
-import { CheckCircle2Icon, SettingsIcon, Trash2Icon, X } from 'lucide-react';
+import { Head, Link, router, useForm } from '@inertiajs/react';
+import {
+    CheckCircle2Icon,
+    CreditCard,
+    LayoutGrid,
+    PackageMinus,
+    Receipt,
+    SettingsIcon,
+    Table2,
+    Trash2Icon,
+    X,
+} from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import InvoiceDialog from '@/components/invoice-dialog';
 import type { InvoiceReceipt } from '@/components/invoice-dialog';
+import { PageHeader } from '@/components/page-header';
+import PaymentForm from '@/components/payment-form';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
     AlertDialog,
@@ -32,17 +44,11 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import AppLayout from '@/layouts/app-layout';
-import { normalizeCategory } from '@/lib/categories';
+import { categoryBadgeClass, normalizeCategory } from '@/lib/categories';
 import { postJson } from '@/lib/http';
 import { inertiaPost } from '@/lib/inertia-action';
-import {
-    buildExactSettlementPayments,
-    clampNonCashInput,
-    formatMoney,
-    paymentPreview,
-    roundMoney,
-} from '@/lib/payments';
-import type { BreadcrumbItem } from '@/types';
+import { buildExactSettlementPayments, formatMoney } from '@/lib/payments';
+import { posCartRowClass, posPanelClass, posTileClass } from '@/lib/pos-ui';
 
 type Product = {
     id: number;
@@ -60,7 +66,7 @@ type Props = {
     openCheckouts: { id: number; label: string }[];
     runningTables: { id: number; name: string; status: string }[];
     isAdmin?: boolean;
-    users: { id: number; name: string }[];
+    users?: { id: number; name: string }[];
 };
 
 type CartItem = {
@@ -70,23 +76,12 @@ type CartItem = {
     quantity: number;
 };
 
-const breadcrumbs: BreadcrumbItem[] = [
-    {
-        title: 'Admin',
-        href: '/admin/products',
-    },
-    {
-        title: 'Products',
-        href: '/admin/products',
-    },
-];
-
 export default function AdminProducts({
     products,
     openCheckouts,
     runningTables,
     isAdmin = false,
-    users,
+    users = [],
 }: Props) {
     const DEFAULT_CATEGORIES = ['Drinks', 'Snacks', 'Sets'] as const;
     const money = formatMoney;
@@ -128,17 +123,6 @@ export default function AdminProducts({
     });
 
     const [createOpen, setCreateOpen] = useState(false);
-    const [stockOpen, setStockOpen] = useState(false);
-    const [stockCart, setStockCart] = useState<
-        { productId: number; name: string; quantity: string }[]
-    >([]);
-    const [stockError, setStockError] = useState<string | null>(null);
-    const [externalOpen, setExternalOpen] = useState(false);
-    const [externalUser, setExternalUser] = useState('');
-    const [externalCart, setExternalCart] = useState<
-        { productId: number; name: string; quantity: string }[]
-    >([]);
-    const [externalError, setExternalError] = useState<string | null>(null);
     const [editProduct, setEditProduct] = useState<Product | null>(null);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [deletingProduct, setDeletingProduct] = useState(false);
@@ -162,6 +146,13 @@ export default function AdminProducts({
     const [actionOpen, setActionOpen] = useState(false);
     const [existingTabOpen, setExistingTabOpen] = useState(false);
     const [runningTableOpen, setRunningTableOpen] = useState(false);
+    const [externalUseOpen, setExternalUseOpen] = useState(false);
+    const [externalUserId, setExternalUserId] = useState(
+        users[0] ? String(users[0].id) : '',
+    );
+    const [externalNote, setExternalNote] = useState('');
+    const [externalError, setExternalError] = useState<string | null>(null);
+    const [externalSaving, setExternalSaving] = useState(false);
     const [payOpen, setPayOpen] = useState(false);
     const [cash, setCash] = useState('');
     const [card, setCard] = useState('');
@@ -272,17 +263,6 @@ export default function AdminProducts({
         (sum, item) => sum + item.price * item.quantity,
         0,
     );
-    const preview = paymentPreview(
-        parseFloat(cash) || 0,
-        parseFloat(card) || 0,
-        parseFloat(transfer) || 0,
-        cartTotal,
-    );
-    const cardNum = roundMoney(parseFloat(card) || 0);
-    const transferNum = roundMoney(parseFloat(transfer) || 0);
-    const maxCardAmount = Math.max(0, roundMoney(cartTotal) - transferNum);
-    const maxTransferAmount = Math.max(0, roundMoney(cartTotal) - cardNum);
-
     const handleOpenActions = () => {
         setPosError(null);
         setPosMessage(null);
@@ -407,6 +387,66 @@ export default function AdminProducts({
         setSelectedTableId((current) => current ?? runningTables[0].id);
         setActionOpen(false);
         setRunningTableOpen(true);
+    };
+
+    const handleActionExternalUse = () => {
+        if (users.length === 0) {
+            setPosError('No staff users available for external use.');
+
+            return;
+        }
+
+        setExternalUserId((current) => current || String(users[0].id));
+        setExternalNote('');
+        setExternalError(null);
+        setActionOpen(false);
+        setExternalUseOpen(true);
+    };
+
+    const handleConfirmExternalUse = () => {
+        if (cart.length === 0) {
+            setExternalError('Cart is empty.');
+
+            return;
+        }
+
+        const userId = Number(externalUserId);
+
+        if (!userId) {
+            setExternalError('Select who used the items.');
+
+            return;
+        }
+
+        setExternalSaving(true);
+        setExternalError(null);
+        router.post(
+            '/admin/products/external-use',
+            {
+                user_id: userId,
+                items: posItemsPayload(),
+                note: externalNote.trim() || null,
+            },
+            {
+                preserveScroll: true,
+                onSuccess: () => {
+                    const staff =
+                        users.find((user) => user.id === userId)?.name ??
+                        'staff';
+                    setExternalUseOpen(false);
+                    setExternalNote('');
+                    setCart([]);
+                    setPosMessage(`External use recorded for ${staff}.`);
+                },
+                onError: (errors) => {
+                    setExternalError(
+                        (errors as { inventory?: string }).inventory ||
+                            'Could not record external use.',
+                    );
+                },
+                onFinish: () => setExternalSaving(false),
+            },
+        );
     };
 
     const handleResetCart = () => {
@@ -543,72 +583,6 @@ export default function AdminProducts({
         editForm.clearErrors();
     };
 
-    const addStockProduct = (product: Product) => {
-        setStockCart((previous) => {
-            const existing = previous.find(
-                (item) => item.productId === product.id,
-            );
-
-            return existing
-                ? previous.map((item) =>
-                      item.productId === product.id
-                          ? { ...item, quantity: item.quantity + 1 }
-                          : item,
-                  )
-                : [
-                      ...previous,
-                      {
-                          productId: product.id,
-                          name: product.name,
-                          quantity: '1',
-                      },
-                  ];
-        });
-    };
-
-    const submitStock = () => {
-        setStockError(null);
-        const invalid = stockCart.some(
-            (item) =>
-                item.quantity.trim() === '' ||
-                item.quantity === '-' ||
-                !Number.isInteger(Number(item.quantity)),
-        );
-
-        if (invalid) {
-            setStockError('Enter a whole number for every selected product.');
-
-            return;
-        }
-
-        router.post(
-            '/admin/products/stock',
-            {
-                items: stockCart
-                    .filter(
-                        (item) =>
-                            item.quantity.trim() !== '' &&
-                            Number(item.quantity) !== 0,
-                    )
-                    .map((item) => ({
-                        product_id: item.productId,
-                        quantity: Number(item.quantity),
-                    })),
-            },
-            {
-                preserveScroll: true,
-                onSuccess: () => {
-                    setStockCart([]);
-                    setStockOpen(false);
-                },
-                onError: (errors) =>
-                    setStockError(
-                        errors.inventory || 'Could not update stock.',
-                    ),
-            },
-        );
-    };
-
     const handleEdit = (e: React.FormEvent) => {
         e.preventDefault();
 
@@ -646,41 +620,26 @@ export default function AdminProducts({
     };
 
     return (
-        <AppLayout breadcrumbs={breadcrumbs}>
+        <AppLayout breadcrumbs={[]}>
             <Head title="Products" />
             <div className="flex h-[calc(100vh-8.5rem)] min-h-[640px] flex-1 flex-col gap-4 rounded-xl p-4">
                 <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-sidebar-border/70 bg-background p-4 shadow-sm dark:border-sidebar-border">
-                    <div className="mb-3 flex items-center justify-between">
-                        <div className="text-sm font-medium text-muted-foreground">
-                            Products POS
-                        </div>
-                        <div className="flex gap-2">
-                            <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => setExternalOpen(true)}
-                            >
-                                External use
-                            </Button>
-                            <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => {
-                                    setStockError(null);
-                                    setStockOpen(true);
-                                }}
-                            >
-                                + Stock
+                    <div className="mb-3">
+                        <PageHeader
+                            title="Products"
+                            description="Scan, tap, and send items to a table or tab."
+                        >
+                            <Button type="button" variant="outline" asChild>
+                                <Link href="/stock">Manage stock</Link>
                             </Button>
                             {isAdmin && (
                                 <Button
-                                    className="rounded-full px-4"
                                     onClick={() => setCreateOpen(true)}
                                 >
                                     + Add product
                                 </Button>
                             )}
-                        </div>
+                        </PageHeader>
                     </div>
 
                     <div className="min-h-0 flex-1 overflow-hidden">
@@ -689,7 +648,7 @@ export default function AdminProducts({
                                 <div className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                                     Categories
                                 </div>
-                                <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-2">
+                                <div className={`flex min-h-0 flex-1 flex-col ${posPanelClass} p-2`}>
                                     <Input
                                         placeholder="Scan / Enter barcode..."
                                         value={posSearch}
@@ -740,7 +699,7 @@ export default function AdminProducts({
                                 <div className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                                     Products
                                 </div>
-                                <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-3">
+                                <div className={`min-h-0 flex-1 overflow-y-auto ${posPanelClass} p-3`}>
                                     <div className="flex flex-wrap content-start gap-3">
                                         {filteredPosProducts.length === 0 && (
                                             <div className="px-2 py-1 text-muted-foreground">
@@ -759,7 +718,7 @@ export default function AdminProducts({
                                                     onClick={() =>
                                                         addToCart(product)
                                                     }
-                                                    className="flex h-full w-full flex-col rounded-lg border border-emerald-700/60 bg-emerald-950/40 px-3 py-3 text-left shadow-sm transition hover:-translate-y-[1px] hover:border-emerald-400 hover:bg-emerald-900/60"
+                                                    className={`${posTileClass} h-full w-full`}
                                                 >
                                                     <div
                                                         className={
@@ -768,7 +727,9 @@ export default function AdminProducts({
                                                                 : undefined
                                                         }
                                                     >
-                                                        <span className="inline-flex h-7 max-w-full items-center rounded-full bg-emerald-700 px-2 text-[10px] font-semibold tracking-wide text-emerald-50 uppercase">
+                                                        <span
+                                                            className={`inline-flex h-7 max-w-full items-center rounded-full px-2 text-[11px] font-semibold tracking-wide uppercase ${categoryBadgeClass(product.category)}`}
+                                                        >
                                                             <span className="truncate">
                                                                 {normalizeCategory(
                                                                     product.category,
@@ -777,11 +738,11 @@ export default function AdminProducts({
                                                         </span>
                                                     </div>
                                                     <div className="flex min-h-0 flex-1 items-center justify-center py-1 text-center">
-                                                        <div className="line-clamp-3 text-sm leading-snug font-semibold text-emerald-50">
+                                                        <div className="line-clamp-3 text-sm leading-snug font-semibold">
                                                             {product.name}
                                                         </div>
                                                     </div>
-                                                    <div className="text-lg font-bold text-emerald-300">
+                                                    <div className="text-lg font-bold text-emerald-700 tabular-nums dark:text-emerald-300">
                                                         {money(
                                                             Number(
                                                                 product.price,
@@ -789,7 +750,7 @@ export default function AdminProducts({
                                                         )}
                                                     </div>
                                                     <div
-                                                        className={`text-xs ${product.stock_quantity <= product.low_stock_threshold ? 'text-amber-300' : 'text-emerald-200/70'}`}
+                                                        className={`text-xs ${product.stock_quantity <= product.low_stock_threshold ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}`}
                                                     >
                                                         Stock:{' '}
                                                         {product.stock_quantity}
@@ -805,7 +766,7 @@ export default function AdminProducts({
                                                         onClick={() =>
                                                             openEdit(product)
                                                         }
-                                                        className="absolute top-3 right-3 z-10 size-7 rounded-full text-emerald-100 hover:bg-emerald-700 hover:text-white"
+                                                        className="absolute top-3 right-3 z-10 size-7 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
                                                     >
                                                         <SettingsIcon className="size-4" />
                                                     </Button>
@@ -820,7 +781,7 @@ export default function AdminProducts({
                                 <div className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                                     Cart
                                 </div>
-                                <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-sidebar-border/70 bg-slate-950/60 p-3 text-sm">
+                                <div className={`flex min-h-0 flex-1 flex-col ${posPanelClass} p-3 text-sm`}>
                                     <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
                                         {cart.length === 0 && (
                                             <div className="px-2 py-1 text-muted-foreground italic">
@@ -830,7 +791,7 @@ export default function AdminProducts({
                                         {cart.map((item) => (
                                             <div
                                                 key={item.productId}
-                                                className="flex items-center justify-between gap-2 rounded-md bg-slate-900/70 px-2 py-1.5"
+                                                className={posCartRowClass}
                                             >
                                                 <div className="flex-1">
                                                     <div className="text-sm font-medium">
@@ -858,8 +819,8 @@ export default function AdminProducts({
                                             </div>
                                         ))}
                                     </div>
-                                    <div className="mt-3 border-t border-emerald-500/40 pt-3">
-                                        <div className="mb-3 flex items-center justify-between text-sm font-semibold">
+                                    <div className="mt-3 border-t border-border pt-3">
+                                        <div className="mb-3 flex items-center justify-between text-base font-semibold">
                                             <span>Total:</span>
                                             <span>{money(cartTotal)}</span>
                                         </div>
@@ -916,51 +877,61 @@ export default function AdminProducts({
                     <DialogHeader>
                         <DialogTitle>Choose next action</DialogTitle>
                         <DialogDescription>
-                            Select where to send these products.
+                            {cart.reduce((sum, item) => sum + item.quantity, 0)}{' '}
+                            item
+                            {cart.reduce((sum, item) => sum + item.quantity, 0) ===
+                            1
+                                ? ''
+                                : 's'}{' '}
+                            · {money(cartTotal)}
                         </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-2">
                         <Button
                             type="button"
-                            className="w-full justify-start"
+                            className="h-11 w-full justify-start gap-2"
                             onClick={handleActionPayNow}
                         >
+                            <CreditCard className="h-4 w-4" />
                             Pay now
                         </Button>
                         <Button
                             type="button"
                             variant="outline"
-                            className="w-full justify-start"
+                            className="w-full justify-start gap-2"
                             onClick={handleCreateNewTab}
                         >
+                            <Receipt className="h-4 w-4" />
                             Add to new open tab
                         </Button>
                         <Button
                             type="button"
                             variant="outline"
-                            className="w-full justify-start"
+                            className="w-full justify-start gap-2"
                             onClick={handleActionExistingTab}
                         >
+                            <LayoutGrid className="h-4 w-4" />
                             Add to existing open tab
                         </Button>
                         <Button
                             type="button"
                             variant="outline"
-                            className="w-full justify-start"
+                            className="w-full justify-start gap-2"
                             onClick={handleActionRunningTable}
                         >
+                            <Table2 className="h-4 w-4" />
                             Add to running table
                         </Button>
-                    </div>
-                    <DialogFooter>
                         <Button
                             type="button"
                             variant="outline"
-                            onClick={() => setActionOpen(false)}
+                            className="w-full justify-start gap-2"
+                            onClick={handleActionExternalUse}
                         >
-                            Close
+                            <PackageMinus className="h-4 w-4" />
+                            External use
                         </Button>
-                    </DialogFooter>
+                    </div>
                 </DialogContent>
             </Dialog>
 
@@ -1064,118 +1035,137 @@ export default function AdminProducts({
                 </DialogContent>
             </Dialog>
 
-            <Dialog open={payOpen} onOpenChange={setPayOpen}>
-                <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
+            <Dialog
+                open={externalUseOpen}
+                onOpenChange={(open) => {
+                    setExternalUseOpen(open);
+
+                    if (!open) {
+                        setExternalError(null);
+                        setExternalNote('');
+                    }
+                }}
+            >
+                <DialogContent className="sm:max-w-md">
                     <DialogHeader>
-                        <DialogTitle>Pay products</DialogTitle>
+                        <DialogTitle>External use</DialogTitle>
                         <DialogDescription>
-                            Split payment. Cash may exceed total to return
-                            change.
+                            Deduct the cart from stock without a sale. Choose
+                            who used the items.
                         </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-3">
-                        <div className="flex justify-between text-sm font-semibold">
-                            <span>Cart total</span>
-                            <span>{money(cartTotal)}</span>
+                        <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-sm">
+                            {cart.reduce((sum, item) => sum + item.quantity, 0)}{' '}
+                            item
+                            {cart.reduce((sum, item) => sum + item.quantity, 0) ===
+                            1
+                                ? ''
+                                : 's'}{' '}
+                            · {money(cartTotal)} (no payment)
                         </div>
-                        <div className="flex justify-between text-sm">
-                            <span>Total paid</span>
-                            <span>{money(preview.totalPaid)}</span>
+                        <div className="space-y-1.5">
+                            <p className="text-xs font-medium text-muted-foreground">
+                                Staff member
+                            </p>
+                            <Select
+                                value={externalUserId || undefined}
+                                onValueChange={setExternalUserId}
+                            >
+                                <SelectTrigger className="w-full">
+                                    <SelectValue placeholder="Select staff" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {users.map((user) => (
+                                        <SelectItem
+                                            key={user.id}
+                                            value={String(user.id)}
+                                        >
+                                            {user.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                         </div>
-                        {preview.change > 0 ? (
-                            <div className="flex justify-between text-sm font-semibold text-emerald-600">
-                                <span>Change</span>
-                                <span>{money(preview.change)}</span>
-                            </div>
-                        ) : (
-                            <div className="flex justify-between text-sm text-muted-foreground">
-                                <span>Amount due</span>
-                                <span>{money(preview.amountDue)}</span>
-                            </div>
+                        <div className="space-y-1.5">
+                            <p className="text-xs font-medium text-muted-foreground">
+                                Note (optional)
+                            </p>
+                            <Input
+                                value={externalNote}
+                                onChange={(event) =>
+                                    setExternalNote(event.target.value)
+                                }
+                                placeholder="Staff drink, spill, house use…"
+                            />
+                        </div>
+                        {externalError && (
+                            <p className="text-sm text-destructive">
+                                {externalError}
+                            </p>
                         )}
-                        <div className="flex items-center gap-2">
-                            <label className="w-24 shrink-0 text-sm text-muted-foreground">
-                                Cash
-                            </label>
-                            <Input
-                                type="number"
-                                step="1"
-                                min={0}
-                                value={cash}
-                                onChange={(e) => setCash(e.target.value)}
-                            />
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <label className="w-24 shrink-0 text-sm text-muted-foreground">
-                                Card
-                            </label>
-                            <Input
-                                type="number"
-                                step="1"
-                                min={0}
-                                max={maxCardAmount}
-                                title={`Max ${money(maxCardAmount)} (with current transfer)`}
-                                value={card}
-                                onChange={(e) =>
-                                    setCard(
-                                        clampNonCashInput(
-                                            e.target.value,
-                                            maxCardAmount,
-                                        ),
-                                    )
-                                }
-                            />
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <label className="w-24 shrink-0 text-sm text-muted-foreground">
-                                Transfer
-                            </label>
-                            <Input
-                                type="number"
-                                step="1"
-                                min={0}
-                                max={maxTransferAmount}
-                                title={`Max ${money(maxTransferAmount)} (with current card)`}
-                                value={transfer}
-                                onChange={(e) =>
-                                    setTransfer(
-                                        clampNonCashInput(
-                                            e.target.value,
-                                            maxTransferAmount,
-                                        ),
-                                    )
-                                }
-                            />
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <label className="w-24 shrink-0 text-sm text-muted-foreground">
-                                Email
-                            </label>
-                            <Input
-                                type="email"
-                                placeholder="customer@example.com"
-                                value={customerEmail}
-                                onChange={(e) =>
-                                    setCustomerEmail(e.target.value)
-                                }
-                            />
-                        </div>
                     </div>
                     <DialogFooter>
                         <Button
                             type="button"
                             variant="outline"
-                            onClick={() => setPayOpen(false)}
-                            disabled={paying}
+                            onClick={() => setExternalUseOpen(false)}
+                            disabled={externalSaving}
                         >
                             Cancel
                         </Button>
                         <Button
                             type="button"
+                            onClick={handleConfirmExternalUse}
+                            disabled={externalSaving || !externalUserId}
+                        >
+                            {externalSaving ? 'Recording…' : 'Record external use'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={payOpen} onOpenChange={setPayOpen}>
+                <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Pay products</DialogTitle>
+                        <DialogDescription>
+                            Split between cash, card, and transfer. Cash may
+                            exceed the total; change is returned from cash.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-3">
+                        <PaymentForm
+                            total={cartTotal}
+                            cash={cash}
+                            card={card}
+                            transfer={transfer}
+                            email={customerEmail}
+                            onCashChange={setCash}
+                            onCardChange={setCard}
+                            onTransferChange={setTransfer}
+                            onEmailChange={setCustomerEmail}
+                        />
+                    </div>
+                    <DialogFooter className="flex-col gap-2 sm:flex-col">
+                        <Button
+                            type="button"
+                            className="h-11 w-full"
                             onClick={handlePayNow}
                             disabled={paying}
                         >
-                            {paying ? 'Processing...' : 'Complete payment'}
+                            {paying
+                                ? 'Processing…'
+                                : `Complete payment · ${money(cartTotal)}`}
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            className="w-full"
+                            onClick={() => setPayOpen(false)}
+                            disabled={paying}
+                        >
+                            Cancel
                         </Button>
                     </DialogFooter>
                 </DialogContent>
@@ -1195,7 +1185,7 @@ export default function AdminProducts({
                 }}
             />
 
-            {(isAdmin || stockOpen || externalOpen) && (
+            {isAdmin && (
                 <>
                     <Dialog
                         open={!!editProduct}
@@ -1370,293 +1360,6 @@ export default function AdminProducts({
                             </AlertDialogFooter>
                         </AlertDialogContent>
                     </AlertDialog>
-
-                    <Dialog
-                        open={externalOpen}
-                        onOpenChange={(open) => {
-                            setExternalOpen(open);
-
-                            if (!open) {
-                                setExternalCart([]);
-                                setExternalError(null);
-                            }
-                        }}
-                    >
-                        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
-                            <DialogHeader>
-                                <DialogTitle>External use</DialogTitle>
-                                <DialogDescription>
-                                    Record products taken by an owner or
-                                    employee. This deducts stock but creates no
-                                    sale.
-                                </DialogDescription>
-                            </DialogHeader>
-                            {externalError && (
-                                <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
-                                    {externalError}
-                                </p>
-                            )}
-                            <Select
-                                value={externalUser}
-                                onValueChange={setExternalUser}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select person" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {users.map((user) => (
-                                        <SelectItem
-                                            key={user.id}
-                                            value={String(user.id)}
-                                        >
-                                            {user.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                            <div className="grid gap-2 sm:grid-cols-2">
-                                {activeProducts.map((product) => (
-                                    <Button
-                                        key={product.id}
-                                        type="button"
-                                        variant="outline"
-                                        onClick={() =>
-                                            setExternalCart((items) =>
-                                                items.some(
-                                                    (i) =>
-                                                        i.productId ===
-                                                        product.id,
-                                                )
-                                                    ? items
-                                                    : [
-                                                          ...items,
-                                                          {
-                                                              productId:
-                                                                  product.id,
-                                                              name: product.name,
-                                                              quantity: '1',
-                                                          },
-                                                      ],
-                                            )
-                                        }
-                                    >
-                                        {product.name} ({product.stock_quantity}
-                                        )
-                                    </Button>
-                                ))}
-                            </div>
-                            <div className="space-y-2">
-                                {externalCart.map((item) => (
-                                    <div
-                                        key={item.productId}
-                                        className="flex items-center justify-between gap-3"
-                                    >
-                                        <span>{item.name}</span>
-                                        <div className="flex items-center gap-2">
-                                            <Input
-                                                className="w-24"
-                                                type="text"
-                                                inputMode="numeric"
-                                                value={item.quantity}
-                                                onChange={(e) =>
-                                                    setExternalCart((items) =>
-                                                        items.map((i) =>
-                                                            i.productId ===
-                                                            item.productId
-                                                                ? {
-                                                                      ...i,
-                                                                      quantity:
-                                                                          e.target.value.replace(
-                                                                              /[^0-9]/g,
-                                                                              '',
-                                                                          ),
-                                                                  }
-                                                                : i,
-                                                        ),
-                                                    )
-                                                }
-                                            />
-                                            <Button
-                                                type="button"
-                                                size="icon"
-                                                variant="ghost"
-                                                aria-label={`Remove ${item.name}`}
-                                                onClick={() =>
-                                                    setExternalCart((items) =>
-                                                        items.filter(
-                                                            (i) =>
-                                                                i.productId !==
-                                                                item.productId,
-                                                        ),
-                                                    )
-                                                }
-                                            >
-                                                <X className="size-4" />
-                                            </Button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                            <DialogFooter>
-                                <Button
-                                    type="button"
-                                    variant="outline"
-                                    onClick={() => setExternalCart([])}
-                                >
-                                    Clear
-                                </Button>
-                                <Button
-                                    type="button"
-                                    disabled={
-                                        !externalUser ||
-                                        externalCart.length === 0 ||
-                                        externalCart.some(
-                                            (item) =>
-                                                item.quantity.trim() === '' ||
-                                                Number(item.quantity) < 1,
-                                        )
-                                    }
-                                    onClick={() => {
-                                        setExternalError(null);
-                                        router.post(
-                                            '/admin/products/external-use',
-                                            {
-                                                user_id: Number(externalUser),
-                                                items: externalCart.map(
-                                                    (item) => ({
-                                                        product_id:
-                                                            item.productId,
-                                                        quantity: Number(
-                                                            item.quantity,
-                                                        ),
-                                                    }),
-                                                ),
-                                            },
-                                            {
-                                                onSuccess: () => {
-                                                    setExternalOpen(false);
-                                                    setExternalCart([]);
-                                                },
-                                                onError: (errors) =>
-                                                    setExternalError(
-                                                        errors.inventory ||
-                                                            'Could not record external use.',
-                                                    ),
-                                            },
-                                        );
-                                    }}
-                                >
-                                    Record use
-                                </Button>
-                            </DialogFooter>
-                        </DialogContent>
-                    </Dialog>
-
-                    <Dialog
-                        open={stockOpen}
-                        onOpenChange={(open) => {
-                            setStockOpen(open);
-
-                            if (!open) {
-                                setStockCart([]);
-                                setStockError(null);
-                            }
-                        }}
-                    >
-                        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-                            <DialogHeader>
-                                <DialogTitle>Update stock</DialogTitle>
-                                <DialogDescription>
-                                    Select products and enter an adjustment.
-                                    Positive values add stock; negative values
-                                    are available to admins only.
-                                </DialogDescription>
-                            </DialogHeader>
-                            {stockError && (
-                                <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
-                                    {stockError}
-                                </p>
-                            )}
-                            <div className="grid gap-2 sm:grid-cols-2">
-                                {activeProducts.map((product) => (
-                                    <Button
-                                        key={product.id}
-                                        type="button"
-                                        variant="outline"
-                                        className="h-auto justify-between py-3 text-left"
-                                        onClick={() => addStockProduct(product)}
-                                    >
-                                        <span>{product.name}</span>
-                                        <span className="text-xs text-muted-foreground">
-                                            Current: {product.stock_quantity}
-                                        </span>
-                                    </Button>
-                                ))}
-                            </div>
-                            <div className="space-y-2 rounded-lg border p-3">
-                                {stockCart.length === 0 && (
-                                    <p className="text-sm text-muted-foreground">
-                                        No products selected.
-                                    </p>
-                                )}
-                                {stockCart.map((item) => (
-                                    <div
-                                        key={item.productId}
-                                        className="flex items-center justify-between gap-3"
-                                    >
-                                        <span className="text-sm font-medium">
-                                            {item.name}
-                                        </span>
-                                        <Input
-                                            type="text"
-                                            inputMode="numeric"
-                                            value={item.quantity}
-                                            onChange={(event) =>
-                                                setStockCart((items) =>
-                                                    items.map((line) =>
-                                                        line.productId ===
-                                                        item.productId
-                                                            ? {
-                                                                  ...line,
-                                                                  quantity:
-                                                                      event.target.value
-                                                                          .replace(
-                                                                              /[^0-9-]/g,
-                                                                              '',
-                                                                          )
-                                                                          .replace(
-                                                                              /(?!^)-/g,
-                                                                              '',
-                                                                          ),
-                                                              }
-                                                            : line,
-                                                    ),
-                                                )
-                                            }
-                                            className="w-28"
-                                        />
-                                    </div>
-                                ))}
-                            </div>
-                            <DialogFooter>
-                                <Button
-                                    type="button"
-                                    variant="outline"
-                                    onClick={() => setStockCart([])}
-                                    disabled={stockCart.length === 0}
-                                >
-                                    Clear
-                                </Button>
-                                <Button
-                                    type="button"
-                                    onClick={submitStock}
-                                    disabled={stockCart.length === 0}
-                                >
-                                    Save stock
-                                </Button>
-                            </DialogFooter>
-                        </DialogContent>
-                    </Dialog>
 
                     <Dialog
                         open={createOpen}

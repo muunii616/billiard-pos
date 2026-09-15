@@ -23,11 +23,16 @@ class TableAdminController extends Controller
             $isAdmin = $request->user()?->role === 'admin';
             $data = $request->validate([
                 'reason' => [$isAdmin ? 'nullable' : 'required', 'string', 'max:2000'],
+                'restock' => ['sometimes', 'boolean'],
             ]);
             $reason = trim((string) ($data['reason'] ?? ''));
+            $restock = $request->boolean('restock', true);
 
-            DB::transaction(function () use ($session, $table, $request, $reason) {
-                InventoryService::restore($session->items);
+            DB::transaction(function () use ($session, $table, $request, $reason, $restock) {
+                if ($restock) {
+                    InventoryService::restore($session->items);
+                }
+                $session->clearAlert();
                 $session->update([
                     'status' => 'cancelled',
                     'ended_at' => now('UTC'),
@@ -36,6 +41,8 @@ class TableAdminController extends Controller
                     'time_total' => 0,
                     'cancel_reason' => $reason !== '' ? $reason : null,
                     'cancelled_by_user_id' => $request->user()?->id,
+                    'stock_restored' => $restock,
+                    'alert_at_played_seconds' => null,
                 ]);
 
                 foreach ($session->items as $item) {
@@ -47,7 +54,11 @@ class TableAdminController extends Controller
                 $table->update(['status' => 'available']);
             });
 
-            return response()->json(['message' => 'Session cancelled.']);
+            return response()->json([
+                'message' => $restock
+                    ? 'Session cancelled. Products returned to stock.'
+                    : 'Session cancelled. Products were not returned to stock.',
+            ]);
         });
     }
 

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\CheckoutSession;
 use App\Models\Receipt;
+use App\Support\CheckoutBalance;
 use App\Support\InventoryService;
 use App\Support\PosItemEditor;
 use App\Support\PosTransaction;
@@ -34,27 +35,46 @@ class CheckoutAdminController extends Controller
                 return response()->json(['message' => 'This tab is not open.'], 422);
             }
 
+            $amountPaid = CheckoutBalance::amountPaid($checkout);
+            if ($amountPaid > 0.01) {
+                return response()->json([
+                    'message' => 'This tab has partial payments. Void those receipts first, or settle the remaining balance.',
+                ], 422);
+            }
+
             $isAdmin = $request->user()?->role === 'admin';
             $data = $request->validate([
                 'reason' => [$isAdmin ? 'nullable' : 'required', 'string', 'max:2000'],
+                'restock' => ['sometimes', 'boolean'],
             ]);
             $reason = trim((string) ($data['reason'] ?? ''));
+            $restock = $request->boolean('restock', true);
 
-            DB::transaction(function () use ($checkout, $request, $reason) {
+            DB::transaction(function () use ($checkout, $request, $reason, $restock) {
                 $checkout->load(['items', 'gameSessions.items']);
-                InventoryService::restore($checkout->items);
-                foreach ($checkout->gameSessions as $session) {
-                    InventoryService::restore($session->items);
+                if ($restock) {
+                    InventoryService::restore($checkout->items);
+                    foreach ($checkout->gameSessions as $session) {
+                        InventoryService::restore($session->items);
+                    }
                 }
                 $checkout->update([
                     'status' => 'voided',
                     'completed_at' => now('UTC'),
                     'void_reason' => $reason !== '' ? $reason : null,
                     'voided_by_user_id' => $request->user()?->id,
+                    'stock_restored' => $restock,
                 ]);
+                foreach ($checkout->gameSessions as $session) {
+                    $session->update(['stock_restored' => $restock]);
+                }
             });
 
-            return response()->json(['message' => 'Tab voided.']);
+            return response()->json([
+                'message' => $restock
+                    ? 'Tab voided. Products returned to stock.'
+                    : 'Tab voided. Products were not returned to stock.',
+            ]);
         });
     }
 
@@ -65,14 +85,18 @@ class CheckoutAdminController extends Controller
                 return response()->json(['message' => 'Only completed or voided tabs can be reopened.'], 422);
             }
             $checkout->load(['items', 'gameSessions.items']);
-            if ($checkout->status === 'voided') {
+            if ($checkout->status === 'voided' && $checkout->stock_restored !== false) {
                 InventoryService::deduct($checkout->items->concat($checkout->gameSessions->flatMap->items));
             }
             Receipt::query()->where('checkout_session_id', $checkout->id)
                 ->where('status', '!=', 'voided')->lockForUpdate()->get()->each->update([
                     'status' => 'voided', 'voided_at' => now('UTC'), 'void_reason' => 'Tab reopened for correction.',
                 ]);
-            $checkout->update(['status' => CheckoutSession::STATUS_OPEN, 'completed_at' => null]);
+            $checkout->update([
+                'status' => CheckoutSession::STATUS_OPEN,
+                'completed_at' => null,
+                'stock_restored' => null,
+            ]);
 
             return response()->json(['message' => 'Tab reopened.', 'checkout_id' => $checkout->id]);
         });

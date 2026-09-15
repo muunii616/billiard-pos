@@ -23,8 +23,11 @@ class GameSession extends Model
         'ended_at',
         'total_minutes',
         'time_total',
+        'alert_at_played_seconds',
+        'time_blocks',
         'cancel_reason',
         'cancelled_by_user_id',
+        'stock_restored',
     ];
 
     protected $casts = [
@@ -32,6 +35,8 @@ class GameSession extends Model
         'paused_at' => 'datetime',
         'last_resume_at' => 'datetime',
         'ended_at' => 'datetime',
+        'time_blocks' => 'array',
+        'stock_restored' => 'boolean',
     ];
 
     public function table()
@@ -84,5 +89,43 @@ class GameSession extends Model
         }
 
         return $base + max(0, (int) $resumeAt->diffInSeconds($asOf ?? now('UTC'), false));
+    }
+
+    /** Remaining seconds until the play-time alert target; null when no alert is set. */
+    public function alertRemainingSeconds(?\DateTimeInterface $asOf = null): ?int
+    {
+        if ($this->alert_at_played_seconds === null) {
+            return null;
+        }
+
+        return max(0, (int) $this->alert_at_played_seconds - $this->playedSeconds($asOf));
+    }
+
+    public function hasAlert(): bool
+    {
+        return $this->alert_at_played_seconds !== null;
+    }
+
+    public function clearAlert(): void
+    {
+        $this->alert_at_played_seconds = null;
+    }
+
+    /** @param  array<string, int>  $counts */
+    public function setAlertFromBlocks(array $counts, bool $extend = false, ?\DateTimeInterface $asOf = null): void
+    {
+        $addSeconds = \App\Support\TableTimeBilling::secondsForBlocks($counts);
+        if ($addSeconds <= 0) {
+            return;
+        }
+
+        $played = $this->playedSeconds($asOf);
+        $currentTarget = $this->alert_at_played_seconds;
+
+        if ($extend && $currentTarget !== null && $currentTarget > $played) {
+            $this->alert_at_played_seconds = (int) $currentTarget + $addSeconds;
+        } else {
+            $this->alert_at_played_seconds = $played + $addSeconds;
+        }
     }
 }

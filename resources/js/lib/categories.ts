@@ -26,3 +26,21 @@ export function normalizeCategory(raw: string | null | undefined): string {
             );
     }
 }
+
+export function categoryBadgeClass(category: string): string {
+    switch (normalizeCategory(category).toLowerCase()) {
+        case 'beer':
+            return 'bg-amber-600 text-white';
+        case 'drinks':
+            return 'bg-sky-600 text-white';
+        case 'glove':
+        case 'gloves':
+            return 'bg-violet-600 text-white';
+        case 'snacks':
+            return 'bg-orange-600 text-white';
+        case 'sets':
+            return 'bg-teal-600 text-white';
+        default:
+            return 'bg-emerald-700 text-white';
+    }
+}
