@@ -44,6 +44,8 @@ test('prepaid start takes payment and counts down the purchased time', function 
 });
 
 test('prepaid time can be extended and then kept as a timer', function () {
+    $this->travelTo(now('UTC')->startOfSecond());
+
     $user = User::factory()->create();
     $table = BilliardTable::create([
         'name' => 'Extend Table',
