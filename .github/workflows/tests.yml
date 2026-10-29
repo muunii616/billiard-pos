@@ -33,7 +33,7 @@ jobs:
           coverage: xdebug
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '22'
 
@@ -60,10 +60,19 @@ jobs:
       - name: Build Assets
         run: npm run build
 
+      - name: Upload Browser Build
+        if: matrix.php-version == '8.4'
+        uses: actions/upload-artifact@v5
+        with:
+          name: browser-build
+          path: public/build
+          retention-days: 1
+
       - name: Tests
         run: ./vendor/bin/pest
 
   browser:
+    needs: ci
     runs-on: ubuntu-latest
 
     steps:
@@ -71,12 +80,18 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '22'
 
       - name: Install Node Dependencies
         run: npm ci
+
+      - name: Download Browser Build
+        uses: actions/download-artifact@v6
+        with:
+          name: browser-build
+          path: public/build
 
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
