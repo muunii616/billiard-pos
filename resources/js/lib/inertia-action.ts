@@ -1,3 +1,4 @@
+import type { RequestPayload } from '@inertiajs/core';
 import { router } from '@inertiajs/react';
 
 type VisitErrors = Record<string, string | string[]>;
@@ -17,7 +18,7 @@ type PostOptions = {
  */
 export function inertiaPost(
     url: string,
-    data: Record<string, unknown> = {},
+    data: RequestPayload = {},
     options: PostOptions = {},
 ): Promise<'success' | 'error' | 'cancelled'> {
     return new Promise((resolve) => {

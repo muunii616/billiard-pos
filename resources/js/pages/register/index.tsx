@@ -1,515 +1,840 @@
-import { Head } from '@inertiajs/react';
-import { Download } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Head, Link, usePage } from '@inertiajs/react';
+import {
+    ArrowRight,
+    ArrowRightLeft,
+    Banknote,
+    CheckCircle2,
+    Download,
+    RefreshCw,
+    Wallet,
+} from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { PageHeader } from '@/components/page-header';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
 import AppLayout from '@/layouts/app-layout';
 import { formatDateTime } from '@/lib/dates';
-import { jsonHeaders } from '@/lib/http';
-import { formatMoney } from '@/lib/payments';
+import { postJson } from '@/lib/http';
+import { useI18n } from '@/lib/i18n';
+import { formatMoney as money } from '@/lib/payments';
 
-type CashSessionInfo = {
+type Shift = {
     id: number;
-    status: 'open' | 'closed';
     opening_cash: number;
     opened_at: string | null;
     closed_at: string | null;
     counted_cash: number | null;
     expected_cash: number;
     variance: number | null;
-    variance_reason: string | null;
     receipts_count: number;
     total_sales: number;
     cash_sales: number;
     card_sales: number;
     transfer_sales: number;
     opened_by: string | null;
+    opened_by_user_id: number | null;
     closed_by: string | null;
 };
-type HistoryResponse = {
-    data: CashSessionInfo[];
-    current_page: number;
-    last_page: number;
-    total: number;
+type RegisterData = {
+    open_session: Shift | null;
+    needs_handover: boolean;
+    history: {
+        data: Shift[];
+        current_page: number;
+        last_page: number;
+        total: number;
+    };
+    users: string[];
 };
 
 export default function RegisterPage() {
-    const money = formatMoney;
-    const [loading, setLoading] = useState(false);
-    const [actionLoading, setActionLoading] = useState(false);
+    const { t } = useI18n();
+    const { auth } = usePage<{ auth: { user: { id: number; name: string } } }>()
+        .props;
+    const [data, setData] = useState<RegisterData | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [openSession, setOpenSession] = useState<CashSessionInfo | null>(
-        null,
-    );
+    const [loadError, setLoadError] = useState<string | null>(null);
+    const [message, setMessage] = useState<string | null>(null);
+    const [reportUrl, setReportUrl] = useState<string | null>(null);
     const [openingCash, setOpeningCash] = useState('');
     const [countedCash, setCountedCash] = useState('');
-    const [varianceReason, setVarianceReason] = useState('');
-    const [history, setHistory] = useState<HistoryResponse>({
-        data: [],
-        current_page: 1,
-        last_page: 1,
-        total: 0,
-    });
-    const [historyUsers, setHistoryUsers] = useState<string[]>([]);
-    const [historyUser, setHistoryUser] = useState('all');
+    const [newOpeningCash, setNewOpeningCash] = useState<string | null>(null);
+    const [reason, setReason] = useState('');
+    const [mode, setMode] = useState<'close' | 'handover' | null>(null);
+    const [historyUser, setHistoryUser] = useState('');
     const [historyMonth, setHistoryMonth] = useState('');
-    const [historyPage, setHistoryPage] = useState(1);
+    const [page, setPage] = useState(1);
+    const requestNumber = useRef(0);
+    const submitting = useRef(false);
+    const shift = data?.open_session;
+    const needsChoice = !!data?.needs_handover && !!shift;
+    const validAmount = (value: string) =>
+        value.trim() !== '' &&
+        Number.isFinite(Number(value)) &&
+        Number(value) >= 0;
+    const variance =
+        shift && validAmount(countedCash)
+            ? Math.round((Number(countedCash) - shift.expected_cash) * 100) /
+              100
+            : null;
+    const nextOpening = newOpeningCash ?? countedCash;
 
-    const closeVariancePreview = useMemo(() => {
-        if (!openSession) {
-            return 0;
-        }
+    const loadCurrent = useCallback(async () => {
+        const request = ++requestNumber.current;
+        setLoading(true);
 
-        return (
-            Math.round(
-                ((Number(countedCash) || 0) -
-                    Number(openSession.expected_cash || 0)) *
-                    100,
-            ) / 100
-        );
-    }, [countedCash, openSession]);
+        try {
+            const params = new URLSearchParams({ page: String(page) });
 
-    const loadCurrent = useCallback(
-        async (
-            page = historyPage,
-            filters = { user: historyUser, month: historyMonth },
-        ) => {
-            setLoading(true);
-            setError(null);
+            if (historyUser) {
+                params.set('user', historyUser);
+            }
 
-            try {
-                const params = new URLSearchParams({ page: String(page) });
+            if (historyMonth) {
+                params.set('month', historyMonth);
+            }
 
-                if (filters.user !== 'all') {
-                    params.set('user', filters.user);
-                }
+            const response = await fetch(`/admin/cash/current?${params}`, {
+                headers: { Accept: 'application/json' },
+            });
 
-                if (filters.month) {
-                    params.set('month', filters.month);
-                }
+            if (!response.ok) {
+                throw new Error('Failed to load register shift.');
+            }
 
-                const res = await fetch(`/admin/cash/current?${params}`, {
-                    headers: { Accept: 'application/json' },
-                });
+            const next: RegisterData = await response.json();
 
-                if (!res.ok) {
-                    throw new Error('Failed to load register shift.');
-                }
-
-                const data = await res.json();
-                const open = (data.open_session ??
-                    null) as CashSessionInfo | null;
-                setOpenSession(open);
-                setHistory(
-                    data.history ?? {
-                        data: [],
-                        current_page: 1,
-                        last_page: 1,
-                        total: 0,
-                    },
-                );
-                setHistoryUsers(data.users ?? []);
-            } catch (e) {
-                setError(
+            if (request === requestNumber.current) {
+                setData(next);
+                setLoadError(null);
+            }
+        } catch (e) {
+            if (request === requestNumber.current) {
+                setLoadError(
                     e instanceof Error
                         ? e.message
                         : 'Failed to load register shift.',
                 );
-            } finally {
+            }
+        } finally {
+            if (request === requestNumber.current) {
                 setLoading(false);
             }
-        },
-        [historyPage, historyUser, historyMonth],
-    );
+        }
+    }, [page, historyUser, historyMonth]);
 
     useEffect(() => {
+        const requests = requestNumber;
         void loadCurrent();
+        const interval = window.setInterval(() => {
+            if (document.visibilityState === 'visible' && !submitting.current) {
+                void loadCurrent();
+            }
+        }, 15000);
+
+        return () => {
+            window.clearInterval(interval);
+            requests.current++;
+        };
     }, [loadCurrent]);
 
-    const handleOpenShift = async () => {
-        setActionLoading(true);
+    useEffect(() => {
+        setMode(null);
+        setCountedCash('');
+        setNewOpeningCash(null);
+        setReason('');
+    }, [shift?.id]);
+
+    const act = async (action: 'open' | 'close' | 'continue' | 'handover') => {
+        if (submitting.current) {
+            return;
+        }
+
+        submitting.current = true;
+        setBusy(true);
         setError(null);
+        setMessage(null);
+        requestNumber.current++;
 
         try {
-            const res = await fetch('/admin/cash/open', {
-                method: 'POST',
-                headers: jsonHeaders(),
-                credentials: 'same-origin',
-                body: JSON.stringify({
-                    opening_cash: Number(openingCash) || 0,
-                }),
+            const result = await postJson(`/admin/cash/${action}`, {
+                session_id: shift?.id,
+                ...(action === 'open'
+                    ? { opening_cash: Number(openingCash) }
+                    : {}),
+                ...(action === 'close' || action === 'handover'
+                    ? {
+                          counted_cash: Number(countedCash),
+                          variance_reason: reason.trim() || null,
+                      }
+                    : {}),
+                ...(action === 'handover'
+                    ? { opening_cash: Number(nextOpening) }
+                    : {}),
             });
-            const data = await res.json().catch(() => ({}));
-
-            if (!res.ok) {
-                throw new Error(data.message || 'Failed to open shift.');
-            }
-
+            setMode(null);
+            setMessage(result.message);
+            setReportUrl(result.receipt_url ?? null);
             setOpeningCash('');
             await loadCurrent();
         } catch (e) {
-            setError(e instanceof Error ? e.message : 'Failed to open shift.');
-        } finally {
-            setActionLoading(false);
-        }
-    };
-
-    const handleCloseShift = async () => {
-        if (!openSession) {
-            return;
-        }
-
-        const variance = closeVariancePreview;
-
-        if (Math.abs(variance) > 0.0001 && varianceReason.trim() === '') {
-            setError('Reason is required when variance is not zero.');
-
-            return;
-        }
-
-        setActionLoading(true);
-        setError(null);
-
-        try {
-            const res = await fetch('/admin/cash/close', {
-                method: 'POST',
-                headers: jsonHeaders(),
-                credentials: 'same-origin',
-                body: JSON.stringify({
-                    counted_cash: Number(countedCash) || 0,
-                    variance_reason: varianceReason.trim() || null,
-                }),
-            });
-            const data = await res.json().catch(() => ({}));
-
-            if (!res.ok) {
-                throw new Error(data.message || 'Failed to close shift.');
-            }
-
-            const receiptUrl =
-                typeof data.receipt_url === 'string' ? data.receipt_url : null;
-            setCountedCash('');
-            setVarianceReason('');
-
-            if (receiptUrl) {
-                window.open(receiptUrl, '_blank', 'noopener,noreferrer');
-            }
-
+            setError(
+                e instanceof Error ? e.message : 'Unable to update register.',
+            );
             await loadCurrent();
-        } catch (e) {
-            setError(e instanceof Error ? e.message : 'Failed to close shift.');
         } finally {
-            setActionLoading(false);
+            submitting.current = false;
+            setBusy(false);
         }
     };
+
+    const beginClose = (nextMode: 'close' | 'handover') => {
+        setError(null);
+        setCountedCash('');
+        setNewOpeningCash(null);
+        setReason('');
+        setMode(nextMode);
+    };
+    const errorAlert = error && (
+        <Alert variant="destructive" role="alert">
+            <AlertDescription>{t(error)}</AlertDescription>
+        </Alert>
+    );
 
     return (
         <AppLayout breadcrumbs={[]}>
-            <Head title="Register" />
-            <div className="flex flex-1 flex-col gap-4 rounded-xl p-4">
-                <PageHeader
-                    title="Register"
-                    description="Open the shift, count cash, and download reports."
-                />
-                <Card className="border-sidebar-border/70 bg-background py-4 dark:border-sidebar-border">
-                    <CardHeader className="px-4 pb-2">
-                        <CardTitle className="text-sm font-semibold">
-                            Register Shift
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4 px-4">
-                        {loading && (
-                            <p className="text-sm text-muted-foreground">
-                                Loading…
-                            </p>
+            <Head title={t('Register')} />
+            <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 p-4 md:p-6">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <PageHeader
+                        title={t('Register')}
+                        description={t(
+                            'Start your shift here. Check the cash and who is responsible for the register.',
                         )}
-                        {!loading && !openSession && (
+                    />
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={loading || busy}
+                        onClick={() => void loadCurrent()}
+                    >
+                        <RefreshCw className={loading ? 'animate-spin' : ''} />
+                        {t('Refresh')}
+                    </Button>
+                </div>
+                {loadError && (
+                    <Alert variant="destructive">
+                        <AlertDescription>{t(loadError)}</AlertDescription>
+                    </Alert>
+                )}
+                {!mode && !needsChoice && errorAlert}
+                {message && (
+                    <Alert className="border-emerald-500/30 bg-emerald-500/5">
+                        <CheckCircle2 />
+                        <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+                            {t(message)}
+                            {reportUrl && (
+                                <a
+                                    className="font-medium underline"
+                                    href={reportUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                >
+                                    {t('Download report')}
+                                </a>
+                            )}
+                        </AlertDescription>
+                    </Alert>
+                )}
+                {!data ? (
+                    <Card>
+                        <CardContent className="py-10 text-center text-muted-foreground">
+                            {t(
+                                loading
+                                    ? 'Loading…'
+                                    : 'Failed to load register shift.',
+                            )}
+                        </CardContent>
+                    </Card>
+                ) : shift ? (
+                    <>
+                        <Card className="overflow-hidden border-emerald-500/30 py-0">
+                            <div className="flex flex-wrap items-center justify-between gap-6 bg-emerald-500/5 p-5 md:p-6">
+                                <div className="flex items-start gap-4">
+                                    <div className="rounded-2xl bg-emerald-600 p-3 text-white">
+                                        <Wallet className="size-6" />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Badge className="bg-emerald-600 text-white">
+                                            {t('Register open')}
+                                        </Badge>
+                                        <h2 className="text-xl font-semibold">
+                                            {t('Shift #{id}', { id: shift.id })}{' '}
+                                            · {shift.opened_by ?? t('Unknown')}
+                                        </h2>
+                                        <p className="text-sm text-muted-foreground">
+                                            {t('Opened')}{' '}
+                                            {shift.opened_at
+                                                ? formatDateTime(
+                                                      shift.opened_at,
+                                                  )
+                                                : '—'}
+                                        </p>
+                                        <p className="text-sm">
+                                            {t('Signed in as {name}', {
+                                                name: auth.user.name,
+                                            })}
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    <Button asChild>
+                                        <Link href="/tables">
+                                            {t('Go to tables')}
+                                            <ArrowRight />
+                                        </Link>
+                                    </Button>
+                                    {shift.opened_by_user_id !==
+                                        auth.user.id && (
+                                        <Button
+                                            variant="outline"
+                                            onClick={() =>
+                                                beginClose('handover')
+                                            }
+                                            disabled={busy}
+                                        >
+                                            {t('Start my own shift')}
+                                        </Button>
+                                    )}
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => beginClose('close')}
+                                        disabled={busy}
+                                    >
+                                        {t('Close shift')}
+                                    </Button>
+                                </div>
+                            </div>
+                            <CardContent className="grid gap-5 p-5 sm:grid-cols-3 md:p-6">
+                                <div>
+                                    <p className="text-sm text-muted-foreground">
+                                        {t('Expected cash in drawer')}
+                                    </p>
+                                    <p className="mt-1 text-3xl font-semibold tabular-nums">
+                                        {money(shift.expected_cash)}
+                                    </p>
+                                    <p className="mt-1 text-xs text-muted-foreground">
+                                        {t('Opening cash + cash sales')}
+                                    </p>
+                                </div>
+                                <div>
+                                    <p className="text-sm text-muted-foreground">
+                                        {t('Total sales')}
+                                    </p>
+                                    <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                        {money(shift.total_sales)}
+                                    </p>
+                                </div>
+                                <div>
+                                    <p className="text-sm text-muted-foreground">
+                                        {t('Receipts')}
+                                    </p>
+                                    <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                        {shift.receipts_count}
+                                    </p>
+                                </div>
+                            </CardContent>
+                        </Card>
+                        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                            {[
+                                ['Opening cash', shift.opening_cash],
+                                ['Cash sales', shift.cash_sales],
+                                ['Card sales', shift.card_sales],
+                                ['Transfer sales', shift.transfer_sales],
+                            ].map(([label, value]) => (
+                                <Card key={label} className="py-4">
+                                    <CardContent className="px-4">
+                                        <p className="text-sm text-muted-foreground">
+                                            {t(String(label))}
+                                        </p>
+                                        <p className="mt-2 text-lg font-semibold tabular-nums">
+                                            {money(Number(value))}
+                                        </p>
+                                    </CardContent>
+                                </Card>
+                            ))}
+                        </div>
+                    </>
+                ) : (
+                    <Card className="border-amber-500/30 bg-amber-500/5">
+                        <CardContent className="grid gap-6 py-2 md:grid-cols-2 md:items-center">
                             <div className="space-y-3">
-                                <p className="text-sm text-muted-foreground">
-                                    No open shift. Count cash in register and
-                                    open shift.
+                                <Banknote className="size-9 text-amber-600" />
+                                <Badge variant="outline">
+                                    {t('Register closed')}
+                                </Badge>
+                                <h2 className="text-2xl font-semibold">
+                                    {t('Start your shift, {name}', {
+                                        name: auth.user.name,
+                                    })}
+                                </h2>
+                                <p className="max-w-md text-sm text-muted-foreground">
+                                    {t(
+                                        'Count the cash in the drawer before taking payments. This shift will be recorded under your name.',
+                                    )}
                                 </p>
-                                <div className="max-w-xs space-y-2">
+                            </div>
+                            <form
+                                className="space-y-4 rounded-xl border bg-background p-5"
+                                onSubmit={(event) => {
+                                    event.preventDefault();
+
+                                    if (validAmount(openingCash)) {
+                                        void act('open');
+                                    }
+                                }}
+                            >
+                                <div className="space-y-2">
                                     <Label htmlFor="opening-cash">
-                                        Opening cash
+                                        {t('Opening cash')}
                                     </Label>
                                     <Input
                                         id="opening-cash"
                                         type="number"
-                                        min={0}
-                                        step="1"
+                                        min="0"
+                                        step="0.01"
+                                        required
                                         value={openingCash}
                                         onChange={(e) =>
                                             setOpeningCash(e.target.value)
                                         }
-                                        placeholder="0.00"
+                                        placeholder="0"
+                                        className="h-12 text-lg"
                                     />
+                                    <p className="text-xs text-muted-foreground">
+                                        {t('Enter 0 if the drawer is empty.')}
+                                    </p>
                                 </div>
                                 <Button
-                                    onClick={handleOpenShift}
-                                    disabled={actionLoading}
+                                    className="h-11 w-full"
+                                    disabled={busy || !validAmount(openingCash)}
                                 >
-                                    {actionLoading ? 'Opening…' : 'Open shift'}
+                                    {t(busy ? 'Opening…' : 'Open shift')}
+                                    <ArrowRight />
                                 </Button>
-                            </div>
-                        )}
-
-                        {!loading && openSession && (
-                            <div className="space-y-4">
-                                <div className="grid gap-1 text-sm sm:grid-cols-2 lg:grid-cols-4">
-                                    <div>
-                                        <span className="text-muted-foreground">
-                                            Status:
-                                        </span>{' '}
-                                        <Badge>Open</Badge>
-                                    </div>
-                                    <div>
-                                        <span className="text-muted-foreground">
-                                            Opened:
-                                        </span>{' '}
-                                        {openSession.opened_at
-                                            ? formatDateTime(
-                                                  openSession.opened_at,
-                                              )
-                                            : '—'}
-                                    </div>
-                                    <div>
-                                        <span className="text-muted-foreground">
-                                            Opening cash:
-                                        </span>{' '}
-                                        {money(openSession.opening_cash)}
-                                    </div>
-                                    <div>
-                                        <span className="text-muted-foreground">
-                                            Expected cash:
-                                        </span>{' '}
-                                        {money(openSession.expected_cash)}
-                                    </div>
-                                    <div>
-                                        <span className="text-muted-foreground">
-                                            Receipts:
-                                        </span>{' '}
-                                        {openSession.receipts_count}
-                                    </div>
-                                    <div>
-                                        <span className="text-muted-foreground">
-                                            Sales:
-                                        </span>{' '}
-                                        {money(openSession.total_sales)}
-                                    </div>
-                                    <div>
-                                        <span className="text-muted-foreground">
-                                            Card:
-                                        </span>{' '}
-                                        {money(openSession.card_sales)}
-                                    </div>
-                                    <div>
-                                        <span className="text-muted-foreground">
-                                            Transfer:
-                                        </span>{' '}
-                                        {money(openSession.transfer_sales)}
-                                    </div>
-                                </div>
-
-                                <div className="max-w-xs space-y-2">
-                                    <Label htmlFor="counted-cash">
-                                        Counted cash
-                                    </Label>
-                                    <Input
-                                        id="counted-cash"
-                                        type="number"
-                                        min={0}
-                                        step="1"
-                                        value={countedCash}
-                                        onChange={(e) =>
-                                            setCountedCash(e.target.value)
-                                        }
-                                        placeholder="0.00"
-                                    />
-                                </div>
-
-                                <div className="text-sm">
-                                    <span className="text-muted-foreground">
-                                        Variance preview:{' '}
-                                    </span>
-                                    <span
-                                        className={
-                                            Math.abs(closeVariancePreview) >
-                                            0.0001
-                                                ? 'text-amber-600 dark:text-amber-400'
-                                                : ''
-                                        }
-                                    >
-                                        {money(closeVariancePreview)}
-                                    </span>
-                                </div>
-
-                                <div className="max-w-lg space-y-2">
-                                    <Label htmlFor="variance-reason">
-                                        Reason{' '}
-                                        {Math.abs(closeVariancePreview) > 0.0001
-                                            ? '(required)'
-                                            : '(optional)'}
-                                    </Label>
-                                    <Input
-                                        id="variance-reason"
-                                        value={varianceReason}
-                                        onChange={(e) =>
-                                            setVarianceReason(e.target.value)
-                                        }
-                                        placeholder="Explain difference when variance is not zero"
-                                    />
-                                </div>
-
-                                <Button
-                                    variant="destructive"
-                                    onClick={handleCloseShift}
-                                    disabled={actionLoading}
+                            </form>
+                        </CardContent>
+                    </Card>
+                )}
+                <Card>
+                    <CardHeader className="gap-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <CardTitle>{t('Shift history')}</CardTitle>
+                            <span className="text-sm text-muted-foreground">
+                                {t('{count} closed shifts', {
+                                    count: data?.history.total ?? 0,
+                                })}
+                            </span>
+                        </div>
+                        <div className="grid gap-3 sm:max-w-lg sm:grid-cols-2">
+                            <div className="space-y-1.5">
+                                <Label htmlFor="history-user">
+                                    {t('Opened by')}
+                                </Label>
+                                <select
+                                    id="history-user"
+                                    className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                                    value={historyUser}
+                                    onChange={(event) => {
+                                        setHistoryUser(event.target.value);
+                                        setPage(1);
+                                    }}
                                 >
-                                    {actionLoading ? 'Closing…' : 'Close shift'}
-                                </Button>
-                            </div>
-                        )}
-
-                        {error && (
-                            <p className="text-sm text-destructive">{error}</p>
-                        )}
-                    </CardContent>
-                </Card>
-
-                <Card className="border-sidebar-border/70 bg-background py-4 dark:border-sidebar-border">
-                    <CardHeader className="px-4 pb-2">
-                        <CardTitle className="text-sm font-semibold">
-                            Shift reports ({history.total})
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4 px-4">
-                        <div className="grid gap-2 md:grid-cols-3">
-                            <Select
-                                value={historyUser}
-                                onValueChange={(value) => {
-                                    setHistoryUser(value);
-                                    setHistoryPage(1);
-                                }}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Filter by user" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">
-                                        All users
-                                    </SelectItem>
-                                    {historyUsers.map((user) => (
-                                        <SelectItem key={user} value={user}>
+                                    <option value="">{t('All staff')}</option>
+                                    {data?.users.map((user) => (
+                                        <option key={user} value={user}>
                                             {user}
-                                        </SelectItem>
+                                        </option>
                                     ))}
-                                </SelectContent>
-                            </Select>
-                            <Input
-                                type="month"
-                                value={historyMonth}
-                                onChange={(e) => {
-                                    setHistoryMonth(e.target.value);
-                                    setHistoryPage(1);
-                                }}
-                            />
+                                </select>
+                            </div>
+                            <div className="space-y-1.5">
+                                <Label htmlFor="history-month">
+                                    {t('Opening month')}
+                                </Label>
+                                <Input
+                                    id="history-month"
+                                    type="month"
+                                    value={historyMonth}
+                                    onChange={(event) => {
+                                        setHistoryMonth(event.target.value);
+                                        setPage(1);
+                                    }}
+                                />
+                            </div>
                         </div>
-                        <div className="divide-y rounded-md border">
-                            {history.data.map((shift) => (
-                                <div
-                                    key={shift.id}
-                                    className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm"
-                                >
-                                    <div>
-                                        <div className="font-medium">
-                                            Shift #{shift.id} ·{' '}
-                                            {shift.opened_by ?? 'Unknown'}
-                                        </div>
-                                        <div className="text-muted-foreground">
-                                            {shift.closed_at
-                                                ? formatDateTime(
-                                                      shift.closed_at,
-                                                  )
-                                                : '—'}{' '}
-                                            · {shift.receipts_count} receipts
-                                        </div>
-                                    </div>
-                                    <div className="flex items-center gap-3">
-                                        <span className="font-semibold">
-                                            {money(shift.total_sales)}
-                                        </span>
-                                        <Button
-                                            size="icon"
-                                            variant="outline"
-                                            asChild
-                                            title="Download report"
-                                        >
-                                            <a
-                                                href={`/admin/cash/${shift.id}/receipt`}
-                                                target="_blank"
-                                                rel="noreferrer"
-                                            >
-                                                <Download className="h-4 w-4" />
-                                                <span className="sr-only">
-                                                    Download report
-                                                </span>
-                                            </a>
-                                        </Button>
-                                    </div>
-                                </div>
-                            ))}
-                            {history.data.length === 0 && (
-                                <div className="p-4 text-sm text-muted-foreground">
-                                    No closed shifts found.
-                                </div>
+                        <p className="text-xs text-muted-foreground">
+                            {t(
+                                'Shifts are listed by their opening date, even when closed after midnight.',
                             )}
+                        </p>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div className="overflow-x-auto rounded-lg border">
+                            <table className="w-full text-left text-sm">
+                                <thead className="bg-muted/50 text-muted-foreground">
+                                    <tr>
+                                        {[
+                                            'Shift',
+                                            'Opened',
+                                            'Closed',
+                                            'Sales',
+                                            'Counted cash',
+                                            'Difference',
+                                            'Report',
+                                        ].map((heading) => (
+                                            <th
+                                                className="px-4 py-3 font-medium whitespace-nowrap"
+                                                key={heading}
+                                            >
+                                                {t(heading)}
+                                            </th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {data?.history.data.map((entry) => (
+                                        <tr key={entry.id} className="border-t">
+                                            <td className="px-4 py-3">
+                                                <p className="font-medium">
+                                                    #{entry.id} ·{' '}
+                                                    {entry.opened_by ??
+                                                        t('Unknown')}
+                                                </p>
+                                                <p className="text-xs text-muted-foreground">
+                                                    {t('Closed by')}{' '}
+                                                    {entry.closed_by ?? '—'}
+                                                </p>
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">
+                                                {entry.opened_at
+                                                    ? formatDateTime(
+                                                          entry.opened_at,
+                                                      )
+                                                    : '—'}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">
+                                                {entry.closed_at
+                                                    ? formatDateTime(
+                                                          entry.closed_at,
+                                                      )
+                                                    : '—'}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap tabular-nums">
+                                                {money(entry.total_sales)}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap tabular-nums">
+                                                {money(entry.counted_cash ?? 0)}
+                                            </td>
+                                            <td
+                                                className={`px-4 py-3 font-medium whitespace-nowrap tabular-nums ${Number(entry.variance) === 0 ? 'text-emerald-600' : 'text-amber-600'}`}
+                                            >
+                                                {money(entry.variance ?? 0)}
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <Button
+                                                    size="icon"
+                                                    variant="ghost"
+                                                    asChild
+                                                >
+                                                    <a
+                                                        href={`/admin/cash/${entry.id}/receipt`}
+                                                        target="_blank"
+                                                        rel="noreferrer"
+                                                        aria-label={t(
+                                                            'Download report',
+                                                        )}
+                                                    >
+                                                        <Download />
+                                                    </a>
+                                                </Button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {data?.history.data.length === 0 && (
+                                        <tr>
+                                            <td
+                                                colSpan={7}
+                                                className="py-10 text-center text-muted-foreground"
+                                            >
+                                                {t('No closed shifts found.')}
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
                         </div>
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between gap-3">
                             <Button
                                 variant="outline"
                                 size="sm"
-                                disabled={history.current_page <= 1}
-                                onClick={() => {
-                                    const page = history.current_page - 1;
-                                    setHistoryPage(page);
-                                }}
+                                disabled={loading || page <= 1}
+                                onClick={() => setPage(page - 1)}
                             >
-                                Previous
+                                {t('Previous')}
                             </Button>
-                            <span className="text-xs text-muted-foreground">
-                                Page {history.current_page} of{' '}
-                                {history.last_page}
-                            </span>
+                            <p className="text-xs text-muted-foreground">
+                                {t('Page {page} of {total}', {
+                                    page: data?.history.current_page ?? 1,
+                                    total: data?.history.last_page ?? 1,
+                                })}
+                            </p>
                             <Button
                                 variant="outline"
                                 size="sm"
                                 disabled={
-                                    history.current_page >= history.last_page
+                                    loading ||
+                                    page >= (data?.history.last_page ?? 1)
                                 }
-                                onClick={() => {
-                                    const page = history.current_page + 1;
-                                    setHistoryPage(page);
-                                    loadCurrent(page);
-                                }}
+                                onClick={() => setPage(page + 1)}
                             >
-                                Next
+                                {t('Next')}
                             </Button>
                         </div>
                     </CardContent>
                 </Card>
             </div>
+            <Dialog open={needsChoice && mode !== 'handover'}>
+                <DialogContent
+                    className="sm:max-w-lg [&>button]:hidden"
+                    onEscapeKeyDown={(event) => event.preventDefault()}
+                    onPointerDownOutside={(event) => event.preventDefault()}
+                >
+                    <DialogHeader>
+                        <div className="mb-2 flex size-12 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600">
+                            <ArrowRightLeft />
+                        </div>
+                        <DialogTitle>
+                            {t('A register is already open')}
+                        </DialogTitle>
+                        <DialogDescription>
+                            {t(
+                                '{owner} opened this shift. Choose how you want to continue as {name}.',
+                                {
+                                    owner: shift?.opened_by ?? t('Unknown'),
+                                    name: auth.user.name,
+                                },
+                            )}
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="rounded-lg bg-muted/50 p-4 text-sm">
+                        <p>
+                            {t('Shift #{id}', { id: shift?.id ?? 0 })} ·{' '}
+                            {shift?.opened_at
+                                ? formatDateTime(shift.opened_at)
+                                : '—'}
+                        </p>
+                        <p className="mt-1 font-medium">
+                            {t('Expected cash in drawer')}:{' '}
+                            {money(shift?.expected_cash ?? 0)}
+                        </p>
+                    </div>
+                    {errorAlert}
+                    <div className="grid gap-3">
+                        <Button
+                            className="h-auto py-3 whitespace-normal"
+                            disabled={busy}
+                            onClick={() => beginClose('handover')}
+                        >
+                            {t('Close and open under my name')}
+                        </Button>
+                        <Button
+                            variant="outline"
+                            className="h-auto py-3 whitespace-normal"
+                            disabled={busy}
+                            onClick={() => void act('continue')}
+                        >
+                            {t('Continue the current shift')}
+                        </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                        {t(
+                            'Continuing keeps the current owner and cash totals unchanged.',
+                        )}
+                    </p>
+                </DialogContent>
+            </Dialog>
+            <Dialog
+                open={mode !== null && !!shift}
+                onOpenChange={(open) => {
+                    if (!open && !busy) {
+                        setMode(null);
+                    }
+                }}
+            >
+                <DialogContent
+                    className="max-h-[90vh] overflow-y-auto sm:max-w-lg"
+                    onEscapeKeyDown={(e) => {
+                        if (busy) {
+                            e.preventDefault();
+                        }
+                    }}
+                    onPointerDownOutside={(e) => {
+                        if (busy) {
+                            e.preventDefault();
+                        }
+                    }}
+                >
+                    <DialogHeader>
+                        <DialogTitle>
+                            {t(
+                                mode === 'handover'
+                                    ? 'Close and open under my name'
+                                    : 'Close shift',
+                            )}
+                        </DialogTitle>
+                        <DialogDescription>
+                            {t(
+                                'Count the cash in the drawer. The old shift stays in history with its original owner.',
+                            )}
+                        </DialogDescription>
+                    </DialogHeader>
+                    <form
+                        className="space-y-4"
+                        onSubmit={(e) => {
+                            e.preventDefault();
+
+                            if (mode) {
+                                void act(mode);
+                            }
+                        }}
+                    >
+                        <div className="rounded-lg bg-muted/50 p-4">
+                            <p className="text-sm text-muted-foreground">
+                                {t('Expected cash in drawer')}
+                            </p>
+                            <p className="text-2xl font-semibold tabular-nums">
+                                {money(shift?.expected_cash ?? 0)}
+                            </p>
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="counted-cash">
+                                {t('Counted cash')}
+                            </Label>
+                            <Input
+                                autoFocus
+                                id="counted-cash"
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                required
+                                value={countedCash}
+                                onChange={(e) => setCountedCash(e.target.value)}
+                                placeholder="0"
+                                disabled={busy}
+                            />
+                        </div>
+                        {variance !== null && (
+                            <p
+                                className={`rounded-md p-3 text-sm font-medium ${variance === 0 ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'}`}
+                            >
+                                {t(
+                                    variance === 0
+                                        ? 'Cash matches the register.'
+                                        : 'Cash difference: {amount}',
+                                    { amount: money(variance) },
+                                )}
+                            </p>
+                        )}
+                        {variance !== null && variance !== 0 && (
+                            <div className="space-y-2">
+                                <Label htmlFor="variance-reason">
+                                    {t('Reason for the difference (required)')}
+                                </Label>
+                                <Input
+                                    id="variance-reason"
+                                    required
+                                    maxLength={2000}
+                                    value={reason}
+                                    onChange={(e) => setReason(e.target.value)}
+                                    disabled={busy}
+                                />
+                            </div>
+                        )}
+                        {mode === 'handover' && (
+                            <div className="space-y-2 border-t pt-4">
+                                <Label htmlFor="handover-opening">
+                                    {t('Opening cash for your shift')}
+                                </Label>
+                                <Input
+                                    id="handover-opening"
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    required
+                                    value={nextOpening}
+                                    onChange={(e) =>
+                                        setNewOpeningCash(e.target.value)
+                                    }
+                                    disabled={busy}
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    {t(
+                                        'Defaults to the cash you counted. Change it if cash is removed or added.',
+                                    )}
+                                </p>
+                                <p className="text-sm">
+                                    {t('New shift owner: {name}', {
+                                        name: auth.user.name,
+                                    })}
+                                </p>
+                            </div>
+                        )}
+                        {errorAlert}
+                        <DialogFooter>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                disabled={busy}
+                                onClick={() => setMode(null)}
+                            >
+                                {t('Cancel')}
+                            </Button>
+                            <Button
+                                disabled={
+                                    busy ||
+                                    !validAmount(countedCash) ||
+                                    (variance !== 0 && !reason.trim()) ||
+                                    (mode === 'handover' &&
+                                        !validAmount(nextOpening))
+                                }
+                            >
+                                {t(
+                                    busy
+                                        ? 'Saving…'
+                                        : mode === 'handover'
+                                          ? 'Close old shift and open mine'
+                                          : 'Confirm close',
+                                )}
+                            </Button>
+                        </DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
         </AppLayout>
     );
 }

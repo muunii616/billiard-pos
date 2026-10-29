@@ -88,7 +88,9 @@ class TableAdminController extends Controller
                 return response()->json(['message' => 'No active session to edit.'], 422);
             }
 
-            $data = $request->validate(PosItemEditor::rules());
+            $data = $request->validate(array_merge(PosItemEditor::rules(), [
+                'items' => ['required', 'array'],
+            ]));
             PosItemEditor::update($session, $data['items']);
 
             return response()->json(['message' => 'Session items updated.']);

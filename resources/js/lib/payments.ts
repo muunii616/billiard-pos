@@ -27,9 +27,9 @@ export function formatMoney(value: number): string {
 }
 
 export function formatPaymentMethod(method: string): string {
-    return method.replaceAll('_', ' ').replace(/\b\w/g, (letter) =>
-        letter.toUpperCase(),
-    );
+    return method
+        .replaceAll('_', ' ')
+        .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export function clampNonCashInput(raw: string, maxAllowed: number): string {
@@ -179,9 +179,7 @@ export function validateTabBalancePayment({
     }
 
     const closes = preview.totalPaid + TOTAL_EPSILON >= preview.total;
-    const applied = closes
-        ? preview.total
-        : roundMoney(preview.totalPaid);
+    const applied = closes ? preview.total : roundMoney(preview.totalPaid);
 
     return { error: null, preview, closes, applied };
 }

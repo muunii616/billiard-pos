@@ -7,6 +7,7 @@ use App\Models\GameSession;
 use App\Models\Product;
 use App\Models\Receipt;
 use App\Models\User;
+use App\Support\CheckoutBalance;
 use Inertia\Testing\AssertableInertia as Assert;
 
 test('table session can start pause and resume', function () {
@@ -143,6 +144,60 @@ test('open tabs can be merged into a target tab', function () {
 
     expect($mergedItem)->not->toBeNull();
     expect($mergedItem->quantity)->toBe(3);
+});
+
+test('open tabs with partial payments can be merged and payments follow the target', function () {
+    $user = User::factory()->create();
+    $product = Product::create([
+        'name' => 'Beer',
+        'category' => 'Drinks',
+        'price' => 5000,
+        'is_active' => true,
+    ]);
+
+    $target = CheckoutSession::create(['status' => 'open']);
+    $source = CheckoutSession::create(['status' => 'open']);
+
+    CheckoutSessionItem::create([
+        'checkout_session_id' => $target->id,
+        'product_id' => $product->id,
+        'product_name' => $product->name,
+        'product_category' => $product->category,
+        'quantity' => 1,
+        'unit_price' => 5000,
+        'total_price' => 5000,
+    ]);
+
+    CheckoutSessionItem::create([
+        'checkout_session_id' => $source->id,
+        'product_id' => $product->id,
+        'product_name' => $product->name,
+        'product_category' => $product->category,
+        'quantity' => 2,
+        'unit_price' => 5000,
+        'total_price' => 10000,
+    ]);
+
+    $partial = Receipt::create([
+        'checkout_session_id' => $source->id,
+        'receipt_number' => 'PARTIAL-MERGE-1',
+        'time_total' => 0,
+        'products_total' => 4000,
+        'grand_total' => 4000,
+        'paid_at' => now('UTC'),
+        'status' => 'paid',
+    ]);
+
+    $this->actingAs($user)
+        ->post(route('checkouts.merge'), [
+            'target_id' => $target->id,
+            'source_ids' => [$source->id],
+        ])
+        ->assertRedirect(route('checkouts.index'));
+
+    expect($source->fresh()->status)->toBe('merged')
+        ->and($partial->fresh()->checkout_session_id)->toBe($target->id)
+        ->and(CheckoutBalance::amountPaid($target->fresh()))->toBe(4000.0);
 });
 
 test('table time is charged from stacked blocks not play minutes', function () {

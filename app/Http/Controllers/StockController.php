@@ -6,13 +6,42 @@ use App\Models\Product;
 use App\Models\StockAdjustment;
 use App\Models\StockUsage;
 use App\Models\User;
+use App\Support\InventoryReport;
+use App\Support\PosDate;
 use App\Support\ProductCategory;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class StockController extends Controller
 {
+    public function download(Request $request)
+    {
+        $data = $request->validate([
+            'period' => ['required', 'in:daily,range,monthly'],
+            'date' => ['required_if:period,daily', 'date_format:Y-m-d'],
+            'from' => ['required_if:period,range', 'date_format:Y-m-d'],
+            'to' => ['required_if:period,range', 'date_format:Y-m-d', 'after_or_equal:from'],
+            'month' => ['required_if:period,monthly', 'date_format:Y-m'],
+        ]);
+        [$start, $end] = PosDate::reportRange($request, 'period');
+        $report = InventoryReport::build($start, $end);
+
+        return Pdf::loadView('pdf.inventory', [
+            'rows' => $report['rows'],
+            'initials' => $report['initials'],
+            'adjustments' => $report['adjustments'],
+            'external' => $report['external'],
+            'totals' => $report['totals'],
+            'closingLabel' => $report['closing_label'],
+            'start' => $start,
+            'end' => $end,
+            'timezone' => PosDate::timezone(),
+            'period' => $data['period'],
+        ])->setPaper('a4', 'landscape')->download('inventory-'.$start->format('Y-m-d').'-'.$end->format('Y-m-d').'.pdf');
+    }
+
     public function index(Request $request): Response
     {
         $products = Product::query()
@@ -55,8 +84,8 @@ class StockController extends Controller
             ->map(fn (StockAdjustment $row) => [
                 'id' => $row->id,
                 'kind' => 'adjustment',
-                'product_name' => $row->product?->name ?? 'Deleted product',
-                'user_name' => $row->user?->name ?? 'Unknown',
+                'product_name' => $row->product?->name,
+                'user_name' => $row->user?->name,
                 'quantity' => (int) $row->quantity_change,
                 'stock_after' => (int) $row->stock_after,
                 'note' => $row->note,
@@ -73,8 +102,8 @@ class StockController extends Controller
             ->map(fn (StockUsage $row) => [
                 'id' => $row->id,
                 'kind' => 'external',
-                'product_name' => $row->product?->name ?? 'Deleted product',
-                'user_name' => $row->user?->name ?? 'Unknown',
+                'product_name' => $row->product?->name,
+                'user_name' => $row->user?->name,
                 'quantity' => -1 * (int) $row->quantity,
                 'stock_after' => null,
                 'note' => $row->note,

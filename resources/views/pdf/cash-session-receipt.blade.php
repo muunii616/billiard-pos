@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Register Shift Receipt</title>
+    <title>Shift #{{ $session->id }} — {{ $shiftDate }}</title>
     <style>
         body {
             font-family: DejaVu Sans, sans-serif;
@@ -70,8 +70,8 @@
 <body>
     @php
         $money = fn ($value) => number_format((float) $value, 0) . ' MNT';
-        $displayTimezone = config('app.display_timezone');
-        $openedAt = $session->opened_at ? $session->opened_at->copy()->setTimezone($displayTimezone)->format('Y-m-d h:i A') : '-';
+        $displayTimezone = \App\Support\PosDate::timezone();
+        $openedAt = ($session->opened_at ?? $session->created_at)->copy()->setTimezone($displayTimezone)->format('Y-m-d h:i A');
         $closedAt = $session->closed_at ? $session->closed_at->copy()->setTimezone($displayTimezone)->format('Y-m-d h:i A') : '-';
     @endphp
 
@@ -82,6 +82,7 @@
             <div class="title">{{ $appName }}</div>
         @endif
         <div class="subtitle">Register Shift Closing Receipt</div>
+        <div class="title">Shift #{{ $session->id }} · {{ $shiftDate }}</div>
     </div>
 
     <div class="section">

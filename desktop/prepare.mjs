@@ -90,7 +90,7 @@ try { await fs.unlink(path.join(stage, 'node_modules')); } catch (e) { if (e.cod
 // Stage from empty: a reused directory would ship files that no longer exist in the project.
 await fs.rm(stage, {recursive: true, force: true});
 await fs.mkdir(stage, {recursive: true});
-for (const name of ['app','bootstrap','config','database','public','resources','routes','vendor','artisan','composer.json','composer.lock','package.json','package-lock.json','vite.config.ts','tsconfig.json']) {
+for (const name of ['app','bootstrap','config','database','lang','public','resources','routes','vendor','artisan','composer.json','composer.lock','package.json','package-lock.json','vite.config.ts','tsconfig.json']) {
   await fs.cp(path.join(root, name), path.join(stage, name), {recursive: true,
     filter: p => {
       const rel = path.relative(root, p).replaceAll('\\','/');

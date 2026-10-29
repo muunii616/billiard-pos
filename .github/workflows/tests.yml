@@ -38,10 +38,15 @@ jobs:
           node-version: '22'
 
       - name: Install Node Dependencies
-        run: npm i
+        run: npm ci
 
       - name: Install Dependencies
         run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Audit Dependencies
+        run: |
+          composer audit --locked --no-interaction
+          npm audit --omit=dev
 
       - name: Copy Environment File
         run: cp .env.example .env
@@ -57,3 +62,27 @@ jobs:
 
       - name: Tests
         run: ./vendor/bin/pest
+
+  browser:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Node Dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Frontend Behavior Tests
+        run: npm run test:frontend
+
+      - name: Browser Tests
+        run: npm run test:e2e

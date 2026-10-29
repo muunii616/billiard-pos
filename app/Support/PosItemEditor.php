@@ -10,7 +10,7 @@ final class PosItemEditor
     public static function rules(): array
     {
         return [
-            'items' => ['required', 'array'],
+            'items' => ['sometimes', 'array'],
             'items.*.id' => ['nullable', 'integer', 'distinct'],
             'items.*.product_id' => ['nullable', 'integer', 'exists:products,id'],
             'items.*.product_name' => ['nullable', 'string', 'max:255'],
@@ -38,16 +38,32 @@ final class PosItemEditor
             }
             if ($item) {
                 $delta = $quantity - (int) $item->quantity;
-                $stock = [['product_id' => $item->product_id, 'quantity' => abs($delta)]];
+                $catalog = $item->product_id ? Product::query()->find($item->product_id) : null;
+
                 if ($delta > 0) {
-                    InventoryService::deduct($stock);
-                } elseif ($delta < 0) {
-                    InventoryService::restore($stock);
+                    if ($catalog && ProductDeal::isDeal($catalog)) {
+                        ProductDeal::assertCanSell($catalog, $delta);
+                    }
+                    InventoryService::deduct([[
+                        'product_id' => $item->product_id,
+                        'quantity' => abs($delta),
+                    ]]);
+                } elseif ($delta < 0 && $item->product_id) {
+                    InventoryService::restore([[
+                        'product_id' => $item->product_id,
+                        'quantity' => abs($delta),
+                    ]]);
                 }
                 if ($quantity === 0) {
                     $item->delete();
                 } else {
-                    $item->update(['quantity' => $quantity, 'total_price' => round($quantity * (float) $item->unit_price, 2)]);
+                    $total = $catalog && ProductDeal::isDeal($catalog)
+                        ? ProductDeal::lineTotal($catalog, $quantity)
+                        : round($quantity * (float) $item->unit_price, 2);
+                    $item->update([
+                        'quantity' => $quantity,
+                        'total_price' => $total,
+                    ]);
                 }
 
                 continue;

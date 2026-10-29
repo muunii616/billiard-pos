@@ -1,14 +1,14 @@
 import { Button } from '@/components/ui/button';
+import { useI18n } from '@/lib/i18n';
+import { formatMoney } from '@/lib/payments';
 import {
     bumpBlockCount,
     emptyBlockCounts,
     formatBlockSummary,
     totalForBlockCounts,
     totalMinutesForBlockCounts,
-    type TimeBlock,
-    type TimeBlockCounts,
 } from '@/lib/time-blocks';
-import { formatMoney } from '@/lib/payments';
+import type { TimeBlock, TimeBlockCounts } from '@/lib/time-blocks';
 
 export function TimeBlockPicker({
     blocks,
@@ -21,31 +21,30 @@ export function TimeBlockPicker({
     onChange: (counts: TimeBlockCounts) => void;
     playedLabel?: string | null;
 }) {
+    const { t } = useI18n();
     const money = formatMoney;
     const timeTotal = totalForBlockCounts(counts, blocks);
     const minutes = totalMinutesForBlockCounts(counts, blocks);
 
     return (
-        <div className="space-y-3 rounded-lg border border-border/70 p-3">
-            <div className="flex items-start justify-between gap-2">
-                <div>
-                    <div className="text-sm font-medium">Table time blocks</div>
-                    <div className="text-xs text-muted-foreground">
-                        Stack 1h / 30m / 15m. Play clock is only a hint.
-                    </div>
+        <div className="min-w-0 space-y-3 rounded-lg border border-border/70 p-3">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1">
+                <div className="text-sm font-medium">
+                    {t('Table time blocks')}
                 </div>
-                <div className="text-right">
-                    <div className="font-semibold tabular-nums">
-                        {money(timeTotal)}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                        {minutes > 0 ? `${minutes} min billed` : 'No blocks'}
-                    </div>
+                <div className="text-right font-semibold tabular-nums">
+                    {money(timeTotal)}
+                </div>
+                <div className="col-span-2 text-xs text-muted-foreground">
+                    {t('Stack 1h / 30m / 15m. Play clock is only a hint.')}{' '}
+                    {minutes > 0
+                        ? t('{minutes} min billed', { minutes })
+                        : t('No blocks')}
                 </div>
             </div>
             {playedLabel ? (
                 <div className="rounded-md bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground">
-                    Played {playedLabel}
+                    {t('Played {time}', { time: playedLabel })}
                 </div>
             ) : null}
             <div className="grid gap-2">
@@ -59,10 +58,12 @@ export function TimeBlockPicker({
                         >
                             <div>
                                 <div className="text-sm font-medium">
-                                    {block.label}
+                                    {t(block.label)}
                                 </div>
                                 <div className="text-xs text-muted-foreground">
-                                    {money(block.price)} each
+                                    {t('{price} each', {
+                                        price: money(block.price),
+                                    })}
                                 </div>
                             </div>
                             <div className="flex items-center gap-1.5">
@@ -73,7 +74,11 @@ export function TimeBlockPicker({
                                     className="h-8 w-8"
                                     onClick={() =>
                                         onChange(
-                                            bumpBlockCount(counts, block.key, -1),
+                                            bumpBlockCount(
+                                                counts,
+                                                block.key,
+                                                -1,
+                                            ),
                                         )
                                     }
                                     disabled={count <= 0}
@@ -90,7 +95,11 @@ export function TimeBlockPicker({
                                     className="h-8 w-8"
                                     onClick={() =>
                                         onChange(
-                                            bumpBlockCount(counts, block.key, 1),
+                                            bumpBlockCount(
+                                                counts,
+                                                block.key,
+                                                1,
+                                            ),
                                         )
                                     }
                                 >
@@ -108,11 +117,21 @@ export function TimeBlockPicker({
                     variant="secondary"
                     onClick={() => onChange(emptyBlockCounts(blocks))}
                 >
-                    Clear
+                    {t('Clear')}
                 </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-                {formatBlockSummary(counts, blocks, money)}
+                {formatBlockSummary(counts, blocks, money) === 'No time blocks'
+                    ? t('No time blocks')
+                    : blocks
+                          .filter(
+                              (block) => (Number(counts[block.key]) || 0) > 0,
+                          )
+                          .map(
+                              (block) =>
+                                  `${counts[block.key]}× ${t(block.label)} (${money(block.price * (counts[block.key] || 0))})`,
+                          )
+                          .join(' · ')}
             </p>
         </div>
     );

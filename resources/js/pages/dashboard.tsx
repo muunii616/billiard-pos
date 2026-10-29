@@ -5,6 +5,7 @@ import { EmptyState } from '@/components/empty-state';
 import { PageHeader } from '@/components/page-header';
 import { Button } from '@/components/ui/button';
 import AppLayout from '@/layouts/app-layout';
+import { useI18n } from '@/lib/i18n';
 import { formatMoney } from '@/lib/payments';
 import tablesRoutes from '@/routes/tables';
 
@@ -71,11 +72,8 @@ function formatDuration(seconds: number): string {
     return `${m}m`;
 }
 
-export default function Dashboard({
-    today,
-    tables,
-    running_sessions,
-}: Props) {
+export default function Dashboard({ today, tables, running_sessions }: Props) {
+    const { t } = useI18n();
     const [now, setNow] = useState(() => Date.now());
 
     useEffect(() => {
@@ -167,22 +165,25 @@ export default function Dashboard({
 
     return (
         <AppLayout breadcrumbs={[]}>
-            <Head title="Dashboard" />
+            <Head title={t('Dashboard')} />
             <div className="flex flex-1 flex-col gap-6 overflow-x-auto rounded-xl p-4">
-                <PageHeader title="Dashboard" description="Today's floor and sales at a glance." />
+                <PageHeader
+                    title={t('Dashboard')}
+                    description={t("Today's floor and sales at a glance.")}
+                />
                 <section>
                     <h2 className="mb-3 text-sm font-medium text-muted-foreground">
-                        Today at a glance
+                        {t('Today at a glance')}
                     </h2>
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                         <div className="rounded-xl border border-sidebar-border/70 bg-card p-4 shadow-sm dark:border-sidebar-border">
                             <p className="text-xs font-medium text-muted-foreground">
-                                Revenue
+                                {t('Revenue')}
                             </p>
                             <div className="mt-2 space-y-1 text-sm">
                                 <div className="flex justify-between">
                                     <span className="text-muted-foreground">
-                                        Table time
+                                        {t('Table time')}
                                     </span>
                                     <span className="font-medium tabular-nums">
                                         {formatMoney(
@@ -192,7 +193,7 @@ export default function Dashboard({
                                 </div>
                                 <div className="flex justify-between">
                                     <span className="text-muted-foreground">
-                                        Food & drinks
+                                        {t('Food & drinks')}
                                     </span>
                                     <span className="font-medium tabular-nums">
                                         {formatMoney(
@@ -207,7 +208,7 @@ export default function Dashboard({
                         </div>
                         <div className="rounded-xl border border-sidebar-border/70 bg-card p-4 shadow-sm dark:border-sidebar-border">
                             <p className="text-xs font-medium text-muted-foreground">
-                                Sessions
+                                {t('Sessions')}
                             </p>
                             <p className="mt-1 text-3xl font-semibold tabular-nums">
                                 {today.sessions_count ?? 0}
@@ -215,7 +216,7 @@ export default function Dashboard({
                         </div>
                         <div className="rounded-xl border border-sidebar-border/70 bg-card p-4 shadow-sm dark:border-sidebar-border">
                             <p className="text-xs font-medium text-muted-foreground">
-                                Tables in use
+                                {t('Tables in use')}
                             </p>
                             <p className="mt-1 text-3xl font-semibold tabular-nums">
                                 {today.tables_in_use ?? 0}
@@ -230,13 +231,13 @@ export default function Dashboard({
                         >
                             <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
                                 <Wallet className="h-4 w-4" />
-                                Open tab
+                                {t('Open tab')}
                             </div>
                             <p className="mt-1 text-3xl font-semibold tabular-nums">
                                 {today.open_tabs_count ?? 0}
                             </p>
                             <p className="mt-0.5 text-xs text-muted-foreground">
-                                unpaid tabs
+                                {t('unpaid tabs')}
                             </p>
                         </Link>
                     </div>
@@ -244,14 +245,15 @@ export default function Dashboard({
 
                 <section>
                     <h2 className="mb-3 text-sm font-medium text-muted-foreground">
-                        All tables
+                        {t('All tables')}
                     </h2>
                     <div className="rounded-xl border border-sidebar-border/70 bg-card dark:border-sidebar-border">
                         <ul className="divide-y divide-sidebar-border/70">
                             {tables.map((table) => {
                                 const liveElapsed =
                                     getLiveElapsedSeconds(table);
-                                const itemsTotal = Number(table.items_total) || 0;
+                                const itemsTotal =
+                                    Number(table.items_total) || 0;
 
                                 return (
                                     <li key={table.id}>
@@ -281,7 +283,7 @@ export default function Dashboard({
                                                 <span
                                                     className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusChip(table)}`}
                                                 >
-                                                    {statusLabel(table)}
+                                                    {t(statusLabel(table))}
                                                 </span>
                                             </div>
                                             {(table.session_status ===
@@ -295,7 +297,7 @@ export default function Dashboard({
                                                         )}
                                                         {itemsTotal > 0 && (
                                                             <span className="ml-2 font-medium text-foreground">
-                                                                items{' '}
+                                                                {t('items')}{' '}
                                                                 {formatMoney(
                                                                     itemsTotal,
                                                                 )}
@@ -313,16 +315,18 @@ export default function Dashboard({
 
                 <section>
                     <h2 className="mb-3 text-sm font-medium text-muted-foreground">
-                        Currently running sessions
+                        {t('Currently running sessions')}
                     </h2>
                     {running_sessions.length === 0 ? (
                         <EmptyState
-                            title="No tables in play"
-                            description="Start a session from the Tables page when guests sit down."
+                            title={t('No tables in play')}
+                            description={t(
+                                'Start a session from the Tables page when guests sit down.',
+                            )}
                             action={
                                 <Button asChild>
                                     <Link href={tablesRoutes.index.url()}>
-                                        Go to Tables
+                                        {t('Go to Tables')}
                                     </Link>
                                 </Button>
                             }
@@ -333,16 +337,16 @@ export default function Dashboard({
                                 <thead>
                                     <tr className="border-b border-sidebar-border/70 bg-muted/50">
                                         <th className="px-4 py-3 text-left font-medium">
-                                            Table
+                                            {t('Table')}
                                         </th>
                                         <th className="px-4 py-3 text-left font-medium">
-                                            Start time
+                                            {t('Start time')}
                                         </th>
                                         <th className="px-4 py-3 text-left font-medium">
-                                            Duration
+                                            {t('Duration')}
                                         </th>
                                         <th className="px-4 py-3 text-right font-medium">
-                                            Items
+                                            {t('Items')}
                                         </th>
                                     </tr>
                                 </thead>

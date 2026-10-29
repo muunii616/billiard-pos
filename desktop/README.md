@@ -4,7 +4,7 @@ This desktop edition bundles Electron, PHP, Caddy, and MariaDB. It runs on a 64-
 
 ## Install and transfer your data
 
-1. Run `Lox-Billiard-POS-Setup-1.0.8.exe` and complete the installer.
+1. Run `Lox-Billiard-POS-Setup-1.0.16.exe` and complete the installer.
 2. Copy your `.loxbackup` file onto that PC (USB or network folder).
 3. Open **Lox Billiard POS**. On first launch it asks you to **Import my data** — choose that `.loxbackup` file.
 4. If the app already opened once without your backup, close it, rename `%APPDATA%\Lox Billiard POS` (for example to `Lox Billiard POS-old`), then open the app again to get the import prompt. Newer builds also have **Lox Billiard → Replace data from backup…**.
@@ -23,6 +23,14 @@ Application data and logs live in `%APPDATA%\Lox Billiard POS`, separately from 
 The app listens only on `127.0.0.1`, using separate ports from the current website. Only one desktop instance can open per Windows account. Close through the app's Exit menu for a final backup and clean database shutdown. Closing the desktop app does not pause or stop table timers.
 
 ## Build on the development laptop
+
+Version 1.0.16 completes Stock translations, including dialogs and inventory PDF reports. Open tabs have date separators in Ulaanbaatar time, newest first. New merges retain the latest source-tab date, including repeated merges, while table timestamps and product lines from different days retain their original dates. A nullable latest-tab timestamp migration runs automatically after the startup backup. Register cash-change handling was verified: a 5,000 sale paid with 20,000 adds only 5,000 to expected cash after returning 15,000 change.
+
+Version 1.0.15 opens Register after every password or two-factor login. If another employee owns the open shift, choose to continue it or count cash and close/open a shift under your own name. Handover is atomic and requires a reason for any cash difference. The register page now highlights ownership and expected cash, includes clearer history and report links, and supports English and Mongolian. History uses the local opening date and shows both opening and closing times. PDF names use shift-N-YYYY-MM-DD.pdf with the opening date, even for overnight shifts. Closing stock snapshots are saved correctly. No new database migration is required for this release.
+
+Version 1.0.14 checks shared inventory while adding or editing the POS cart and before opening payment. Four beers allow one 2+1 package, but not two; regular beer and Special offers share the same stock limit. The server still checks stock when saving the sale.
+
+Version 1.0.13 fixes Special offer stock validation: a valid 2+1 sale now succeeds when only three to five base items remain. Deals still deduct the full package quantity and reject actual shortages. This applies to new tabs, existing tabs, table orders, and admin item additions.
 
 Prerequisites: current project dependencies installed, PHP 8.5, Node, and internet for the first build.
 
@@ -65,3 +73,11 @@ Version 1.0.6 adds **Replace data from backup…** so a PC that already started 
 Version 1.0.7 asks whether to return products to stock when cancelling a table or deleting a tab. Overview shows item-level detail for cancelled sessions and voided tabs. Open tabs list products for everyone, with View details for employees and Edit items still admin-only. Soft-delete for staff accounts is included so users with sales history can be removed from the active list.
 
 Version 1.0.8 clears stuck running/paused sessions that were left on tables already marked available (this blocked Start on tables 6 and 7). Cancel/pause/resume now find those sessions correctly, and Start failures show an on-screen error.
+
+Version 1.0.9 lets admins edit table time blocks inside open-tab Edit items, stops number fields from changing on scroll/arrow keys (stock −/+ buttons stay), restores table hover actions on hybrid Windows PCs, and allows merging open tabs that already have partial payments (payments follow the target tab).
+
+Version 1.0.10 adds Special buy/get deals (1+1, 2+1, 2+2) as Special-category products: pick a base product, ratio, and optional dates; POS charges paid units only and deducts full package stock from the base product. Also fixes product create so empty cost/stock fields and the products-page poll no longer hide newly added deals. Deal columns migrate automatically on first launch after the startup backup.
+
+Version 1.0.12 adds prepaid tables and Mongolian. A free table can Run timer (count up, billed in blocks at the end) or Prepaid (pick 1h / 30m / 15m, take payment now, start a countdown). Prepaid time can be extended, ended, or continued as a timer. Closing a prepaid table does not charge that time again; payment is asked only for items that were not paid. The interface defaults to Mongolian, with МН / EN at the bottom of the sidebar. Product names stay as stored. Cash is shown as Бэлэн and transfer QR as Шилжүүлэг. Open-tab and overview labels are translated. The end-session buttons stay inside the window in both languages. Prepaid columns migrate automatically on first launch after the startup backup.
+
+Version 1.0.11 is the store-floor update. Clicking a table opens a full-height sidebar with Session (timer, items, start, pause, end) and Settings (name, rotate, move earlier or later, status). Vertical and horizontal tables are the same size turned on their side, four fit on a row, and horizontal tables sit centered in the row. Status stays locked while a table is running or paused. The products cart and Continue stay on screen while the product list scrolls. One Special deal can be created for several base products at once. Stock can download an inventory PDF. Overview invoices for a tab payment list the table time and items that were on that tab. Table rotation and order migrate automatically on first launch after the startup backup.

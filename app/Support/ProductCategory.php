@@ -12,6 +12,7 @@ final class ProductCategory
             'drink', 'drinks' => 'Drinks',
             'snack', 'snacks' => 'Snacks',
             'set', 'sets', 'combo', 'combos' => 'Sets',
+            'special', 'specials', 'deal', 'deals' => 'Special',
             default => Str::of((string) $category)->trim()->squish()->title()->toString() ?: 'Other',
         };
     }

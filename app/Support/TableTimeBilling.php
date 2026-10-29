@@ -72,6 +72,23 @@ final class TableTimeBilling
     }
 
     /**
+     * Add two block-count maps. Unknown keys are dropped.
+     *
+     * @param  array<string|int, mixed>  $base
+     * @param  array<string|int, mixed>  $add
+     * @return array<string, int>
+     */
+    public static function mergeCounts(array $base, array $add): array
+    {
+        $merged = self::normalizeCounts($base);
+        foreach (self::normalizeCounts($add) as $key => $count) {
+            $merged[$key] = ($merged[$key] ?? 0) + $count;
+        }
+
+        return $merged;
+    }
+
+    /**
      * @param  array<string, int>  $counts
      */
     public static function totalMinutesForBlocks(array $counts): int

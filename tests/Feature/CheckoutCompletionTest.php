@@ -1,9 +1,12 @@
 <?php
 
 use App\Models\BilliardTable;
+use App\Models\CheckoutSession;
+use App\Models\CheckoutSessionItem;
 use App\Models\GameSession;
 use App\Models\Product;
 use App\Models\Receipt;
+use App\Models\SessionItem;
 use App\Models\User;
 
 test('checkout completion allows overpaid cash and stores payment rows', function () {
@@ -213,4 +216,71 @@ test('open tab with partial payments cannot be voided until receipts are cleared
         'id' => $checkoutId,
         'status' => 'open',
     ]);
+});
+
+test('tab payment invoice lists the table time and items on the tab', function () {
+    $user = User::factory()->create();
+    $table = BilliardTable::create([
+        'name' => 'Table 4',
+        'status' => 'available',
+    ]);
+    $drink = Product::create([
+        'name' => 'Fuze Tea',
+        'category' => 'Drinks',
+        'price' => 5000,
+        'is_active' => true,
+    ]);
+    $snack = Product::create([
+        'name' => 'Lays',
+        'category' => 'Snacks',
+        'price' => 3000,
+        'is_active' => true,
+    ]);
+    $checkout = CheckoutSession::create(['status' => 'open']);
+    CheckoutSessionItem::create([
+        'checkout_session_id' => $checkout->id,
+        'product_id' => $snack->id,
+        'product_name' => $snack->name,
+        'product_category' => 'Snacks',
+        'quantity' => 1,
+        'unit_price' => 3000,
+        'total_price' => 3000,
+    ]);
+    $session = GameSession::create([
+        'billiard_table_id' => $table->id,
+        'checkout_session_id' => $checkout->id,
+        'user_id' => $user->id,
+        'status' => 'completed',
+        'started_at' => now()->subHour(),
+        'ended_at' => now(),
+        'total_played_seconds' => 3600,
+        'time_total' => 20000,
+        'time_blocks' => ['60' => 1],
+    ]);
+    SessionItem::create([
+        'game_session_id' => $session->id,
+        'product_id' => $drink->id,
+        'product_name' => $drink->name,
+        'product_category' => 'Drinks',
+        'quantity' => 2,
+        'unit_price' => 5000,
+        'total_price' => 10000,
+    ]);
+
+    $this->actingAs($user)
+        ->postJson(route('checkouts.complete', $checkout), [
+            'payments' => [['method' => 'cash', 'amount' => 5000]],
+        ])
+        ->assertOk();
+
+    $receipt = Receipt::query()->where('checkout_session_id', $checkout->id)->first();
+
+    $this->actingAs($user)
+        ->getJson(route('admin.receipts.show', $receipt))
+        ->assertOk()
+        ->assertJsonPath('line_items.0.type', 'partial')
+        ->assertJsonPath('line_items.0.components.0.description', 'Table 4 · 1 hour')
+        ->assertJsonPath('line_items.0.components.1.description', 'Table 4 · Fuze Tea')
+        ->assertJsonPath('line_items.0.components.1.quantity', 2)
+        ->assertJsonPath('line_items.0.components.2.description', 'Lays');
 });

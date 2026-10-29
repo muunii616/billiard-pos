@@ -12,6 +12,13 @@ class BilliardTable extends Model
     protected $fillable = [
         'name',
         'status',
+        'rotation',
+        'sort_order',
+    ];
+
+    protected $casts = [
+        'rotation' => 'integer',
+        'sort_order' => 'integer',
     ];
 
     public function sessions()

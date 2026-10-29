@@ -5,6 +5,11 @@ const email = process.env.E2E_EMAIL ?? 'admin@billiardpos.test';
 const password = process.env.E2E_PASSWORD ?? 'password';
 
 test.describe('POS smoke flow', () => {
+  test.skip(
+    !process.env.E2E_BASE_URL,
+    'Set E2E_BASE_URL to run tests against a live POS server.',
+  );
+
   test('login and open products payment modal', async ({ page }) => {
     await page.goto('/login');
 

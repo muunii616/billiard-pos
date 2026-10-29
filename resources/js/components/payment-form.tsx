@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useI18n } from '@/lib/i18n';
 import {
     clampNonCashInput,
     formatMoney,
@@ -75,6 +76,7 @@ export default function PaymentForm({
     onTransferChange,
     onEmailChange,
 }: PaymentFormProps) {
+    const { t } = useI18n();
     const money = formatMoney;
     const cashNum = parseFloat(cash) || 0;
     const cardNum = parseFloat(card) || 0;
@@ -101,9 +103,9 @@ export default function PaymentForm({
                 <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                     {settled
                         ? preview.change > 0.01
-                            ? 'Change due'
-                            : 'Paid in full'
-                        : 'Amount due'}
+                            ? t('Change due')
+                            : t('Paid in full')
+                        : t('Amount due')}
                 </div>
                 <div
                     className={`mt-1 text-3xl font-semibold tabular-nums ${
@@ -114,8 +116,12 @@ export default function PaymentForm({
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">
                     {hasEntry
-                        ? `Received ${money(preview.totalPaid)} of ${money(totalNum)}`
-                        : (totalHint ?? `Cart total ${money(totalNum)}`)}
+                        ? t('Received {paid} of {total}', {
+                              paid: money(preview.totalPaid),
+                              total: money(totalNum),
+                          })
+                        : (totalHint ??
+                          t('Cart total {total}', { total: money(totalNum) }))}
                 </div>
             </div>
 
@@ -126,7 +132,7 @@ export default function PaymentForm({
                     size="sm"
                     onClick={fillExactCash}
                 >
-                    Exact cash
+                    {t('Exact cash')}
                 </Button>
                 {QUICK_NOTES.map((note) => (
                     <Button
@@ -144,31 +150,33 @@ export default function PaymentForm({
 
             <div className="grid gap-3">
                 <div className="flex items-center gap-2">
-                    <Label className="w-24 shrink-0">Cash</Label>
-                    <MoneyInput
-                        min={0}
-                        value={cash}
-                        onChange={onCashChange}
-                    />
+                    <Label className="w-24 shrink-0">{t('Cash')}</Label>
+                    <MoneyInput min={0} value={cash} onChange={onCashChange} />
                 </div>
                 <div className="flex items-center gap-2">
-                    <Label className="w-24 shrink-0">Card</Label>
+                    <Label className="w-24 shrink-0">{t('Card')}</Label>
                     <MoneyInput
                         min={0}
                         max={maxCardAmount}
-                        title={`Max ${money(maxCardAmount)} (with current transfer)`}
+                        title={t('Max {amount} (with current transfer)', {
+                            amount: money(maxCardAmount),
+                        })}
                         value={card}
                         onChange={(value) =>
-                            onCardChange(clampNonCashInput(value, maxCardAmount))
+                            onCardChange(
+                                clampNonCashInput(value, maxCardAmount),
+                            )
                         }
                     />
                 </div>
                 <div className="flex items-center gap-2">
-                    <Label className="w-24 shrink-0">Transfer</Label>
+                    <Label className="w-24 shrink-0">{t('Transfer')}</Label>
                     <MoneyInput
                         min={0}
                         max={maxTransferAmount}
-                        title={`Max ${money(maxTransferAmount)} (with current card)`}
+                        title={t('Max {amount} (with current card)', {
+                            amount: money(maxTransferAmount),
+                        })}
                         value={transfer}
                         onChange={(value) =>
                             onTransferChange(
@@ -179,7 +187,7 @@ export default function PaymentForm({
                 </div>
                 <details className="rounded-md border border-border px-3 py-2">
                     <summary className="cursor-pointer text-sm text-muted-foreground">
-                        Email receipt
+                        {t('Email receipt')}
                     </summary>
                     <Input
                         type="email"

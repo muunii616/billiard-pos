@@ -16,8 +16,33 @@ export const DEFAULT_TIME_BLOCKS: TimeBlock[] = [
     { minutes: 15, price: 5000, label: '15 min', key: '15' },
 ];
 
-export function emptyBlockCounts(blocks: TimeBlock[] = DEFAULT_TIME_BLOCKS): TimeBlockCounts {
+export function emptyBlockCounts(
+    blocks: TimeBlock[] = DEFAULT_TIME_BLOCKS,
+): TimeBlockCounts {
     return Object.fromEntries(blocks.map((block) => [block.key, 0]));
+}
+
+/** Merge stored session counts into a full picker map (missing keys = 0). */
+export function countsFromStored(
+    stored: Record<string, number> | null | undefined,
+    blocks: TimeBlock[] = DEFAULT_TIME_BLOCKS,
+): TimeBlockCounts {
+    const counts = emptyBlockCounts(blocks);
+
+    if (!stored) {
+        return counts;
+    }
+
+    for (const block of blocks) {
+        const raw =
+            stored[block.key] ??
+            stored[String(block.minutes)] ??
+            (stored as Record<number, number>)[block.minutes] ??
+            0;
+        counts[block.key] = Math.max(0, Math.floor(Number(raw) || 0));
+    }
+
+    return counts;
 }
 
 export function totalForBlockCounts(
@@ -26,7 +51,8 @@ export function totalForBlockCounts(
 ): number {
     return roundMoney(
         blocks.reduce(
-            (sum, block) => sum + block.price * (Number(counts[block.key]) || 0),
+            (sum, block) =>
+                sum + block.price * (Number(counts[block.key]) || 0),
             0,
         ),
     );
@@ -83,25 +109,30 @@ export function formatCountdown(seconds: number): string {
 }
 
 /** Play a short repeating beep using Web Audio (no asset required). */
-export function playAlertBeep(audioContext?: AudioContext | null): AudioContext | null {
+export function playAlertBeep(
+    audioContext?: AudioContext | null,
+): AudioContext | null {
     try {
         const Ctx =
             window.AudioContext ||
             (window as unknown as { webkitAudioContext?: typeof AudioContext })
                 .webkitAudioContext;
+
         if (!Ctx) {
             return audioContext ?? null;
         }
 
-        const ctx = audioContext && audioContext.state !== 'closed'
-            ? audioContext
-            : new Ctx();
+        const ctx =
+            audioContext && audioContext.state !== 'closed'
+                ? audioContext
+                : new Ctx();
 
         if (ctx.state === 'suspended') {
             void ctx.resume();
         }
 
         const now = ctx.currentTime;
+
         for (let i = 0; i < 3; i++) {
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
@@ -109,7 +140,10 @@ export function playAlertBeep(audioContext?: AudioContext | null): AudioContext 
             osc.frequency.value = 880;
             gain.gain.setValueAtTime(0.0001, now + i * 0.28);
             gain.gain.exponentialRampToValueAtTime(0.18, now + i * 0.28 + 0.02);
-            gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.28 + 0.18);
+            gain.gain.exponentialRampToValueAtTime(
+                0.0001,
+                now + i * 0.28 + 0.18,
+            );
             osc.connect(gain);
             gain.connect(ctx.destination);
             osc.start(now + i * 0.28);

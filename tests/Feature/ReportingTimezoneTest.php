@@ -61,9 +61,9 @@ it('presents both receipt date and time in the same local timezone', function ()
     expect($payload['date'])->toBe('08-09-2026')->and($payload['time'])->toBe('01:00:00 AM');
 });
 
-it('filters cash shift history by local month', function () {
-    foreach (['2026-08-31 15:59:59', '2026-08-31 16:00:00'] as $closedAt) {
-        CashSession::create(['status' => 'closed', 'opening_cash' => 0, 'opened_at' => '2026-08-31 10:00:00', 'closed_at' => $closedAt]);
+it('filters cash shift history by local opening month', function () {
+    foreach (['2026-08-31 15:59:59', '2026-08-31 16:00:00'] as $openedAt) {
+        CashSession::create(['status' => 'closed', 'opening_cash' => 0, 'opened_at' => $openedAt, 'closed_at' => '2026-09-01 01:00:00']);
     }
     $this->getJson('/admin/cash/current?month=2026-09')->assertOk()->assertJsonPath('history.total', 1);
 });

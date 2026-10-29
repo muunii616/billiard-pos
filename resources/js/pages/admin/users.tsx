@@ -1,5 +1,6 @@
 import { Head, router, useForm, usePage } from '@inertiajs/react';
 import { useState } from 'react';
+import { PageHeader } from '@/components/page-header';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
     AlertDialog,
@@ -37,8 +38,8 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
-import { PageHeader } from '@/components/page-header';
 import AppLayout from '@/layouts/app-layout';
+import { useI18n } from '@/lib/i18n';
 
 type User = {
     id: number;
@@ -65,6 +66,7 @@ function userInitials(name: string): string {
 }
 
 export default function AdminUsers({ users }: Props) {
+    const { t } = useI18n();
     const page = usePage().props as {
         auth: { user: { id: number } };
         errors?: Record<string, string>;
@@ -169,7 +171,7 @@ export default function AdminUsers({ users }: Props) {
 
     return (
         <AppLayout breadcrumbs={[]}>
-            <Head title="Users" />
+            <Head title={t('Users')} />
             <div className="flex flex-1 flex-col gap-6 rounded-xl p-4">
                 {(deleteError || pageUserError) && (
                     <Alert variant="destructive">
@@ -180,14 +182,16 @@ export default function AdminUsers({ users }: Props) {
                     </Alert>
                 )}
                 <PageHeader
-                    title="Users"
-                    description="Manage staff accounts and roles for your venue."
+                    title={t('Users')}
+                    description={t(
+                        'Manage staff accounts and roles for your venue.',
+                    )}
                 >
                     <Button
                         className="w-full shrink-0 sm:w-auto"
                         onClick={() => setCreateOpen(true)}
                     >
-                        + Add user
+                        {t('+ Add user')}
                     </Button>
                 </PageHeader>
 

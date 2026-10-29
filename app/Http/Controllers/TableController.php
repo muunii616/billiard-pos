@@ -12,6 +12,7 @@ use App\Support\InventoryService;
 use App\Support\PaymentPayload;
 use App\Support\PosItemUpserter;
 use App\Support\PosTransaction;
+use App\Support\ProductDeal;
 use App\Support\ReceiptLineItemSnapshot;
 use App\Support\ReceiptPresenter;
 use App\Support\TableTimeBilling;
@@ -26,7 +27,7 @@ class TableController extends Controller
 {
     public function index(): Response
     {
-        $tables = BilliardTable::query()->orderBy('id')->get()
+        $tables = BilliardTable::query()->orderBy('sort_order')->orderBy('id')->get()
             ->map(function (BilliardTable $table) {
                 $currentSession = $table->latestActiveSession(['items']);
 
@@ -61,6 +62,8 @@ class TableController extends Controller
                     'id' => $table->id,
                     'name' => $table->name,
                     'status' => $table->status,
+                    'rotation' => (int) ($table->rotation ?? 0) === 90 ? 90 : 0,
+                    'sort_order' => (int) ($table->sort_order ?? 0),
                     'current_session' => $currentSession ? [
                         'id' => $currentSession->id,
                         'status' => $currentSession->status,
@@ -71,6 +74,10 @@ class TableController extends Controller
                         'time_total' => $currentSession->time_total,
                         'alert_at_played_seconds' => $alertAtPlayedSeconds,
                         'has_alert' => $currentSession->hasAlert(),
+                        'billing_mode' => $currentSession->billing_mode ?? 'timer',
+                        'prepaid_seconds' => (int) ($currentSession->prepaid_seconds ?? 0),
+                        'prepaid_amount' => (float) ($currentSession->prepaid_amount ?? 0),
+                        'prepaid_as_timer' => (bool) ($currentSession->prepaid_as_timer ?? false),
                         'items' => $sessionItems,
                     ] : null,
                 ];
@@ -86,8 +93,10 @@ class TableController extends Controller
         return Inertia::render('tables/index', [
             'tables' => $tables,
             'products' => Product::where('is_active', true)
+                ->with('dealProduct:id,name,stock_quantity')
                 ->orderBy('name')
-                ->get(['id', 'name', 'price', 'category', 'stock_quantity', 'low_stock_threshold']),
+                ->get()
+                ->map(fn (Product $product) => ProductDeal::posPayload($product)),
             'timeBlocks' => TableTimeBilling::blocks(),
             'receipt' => $receipt,
             'isAdmin' => $isAdmin,
@@ -101,6 +110,11 @@ class TableController extends Controller
                 throw ValidationException::withMessages(['table' => 'Only available tables can be started.']);
             }
 
+            $mode = (string) $request->input('mode', 'timer');
+            if (! in_array($mode, ['timer', 'prepaid'], true)) {
+                throw ValidationException::withMessages(['mode' => 'Choose run timer or prepaid.']);
+            }
+
             // Persist lifecycle timestamps explicitly in UTC. Display conversion is
             // handled at the presentation boundary (Asia/Ulaanbaatar).
             $now = now('UTC');
@@ -108,15 +122,58 @@ class TableController extends Controller
                 'billiard_table_id' => $table->id,
                 'user_id' => $request->user()->id,
                 'status' => 'running',
+                'billing_mode' => $mode,
                 'started_at' => $now,
                 'last_resume_at' => $now,
                 'total_played_seconds' => 0,
                 'time_total' => 0,
             ]);
+            $session->setRelation('table', $table);
+
+            $receiptPayload = null;
+            if ($mode === 'prepaid') {
+                $receiptPayload = $this->collectPrepaid($request, $session, extend: false);
+            }
 
             $table->update(['status' => 'running']);
 
-            return redirect()->back()->with('session_started', $session->id);
+            $redirect = redirect()->back()->with('session_started', $session->id);
+            if ($receiptPayload !== null) {
+                $redirect->with('receipt', $receiptPayload);
+            }
+
+            return $redirect;
+        });
+    }
+
+    public function extendPrepaid(Request $request, BilliardTable $table)
+    {
+        return PosTransaction::table($table, function (BilliardTable $table) use ($request) {
+            $session = $table->latestActiveSession();
+            if (! $session || ! $session->isPrepaid()) {
+                throw ValidationException::withMessages(['table' => 'This table is not on prepaid time.']);
+            }
+
+            $session->setRelation('table', $table);
+            $receiptPayload = $this->collectPrepaid($request, $session, extend: true);
+
+            return redirect()->back()->with('receipt', $receiptPayload);
+        });
+    }
+
+    public function releasePrepaid(BilliardTable $table)
+    {
+        return PosTransaction::table($table, function (BilliardTable $table) {
+            $session = $table->latestActiveSession();
+            if (! $session || ! $session->isPrepaid()) {
+                throw ValidationException::withMessages(['table' => 'This table is not on prepaid time.']);
+            }
+
+            $session->prepaid_as_timer = true;
+            $session->clearAlert();
+            $session->save();
+
+            return redirect()->back();
         });
     }
 
@@ -174,6 +231,10 @@ class TableController extends Controller
                 throw ValidationException::withMessages(['table' => 'No active session for this table.']);
             }
 
+            if ($session->prepaidClockActive()) {
+                throw ValidationException::withMessages(['table' => 'Extend the prepaid time instead of setting an alert.']);
+            }
+
             $parsed = TableTimeBilling::parseOrFail($request->input('time_blocks'));
             if ($parsed['total_minutes'] <= 0) {
                 throw ValidationException::withMessages(['time_blocks' => 'Select at least one time block for the alert.']);
@@ -196,6 +257,9 @@ class TableController extends Controller
                 throw ValidationException::withMessages(['table' => 'No active session for this table.']);
             }
 
+            if ($session->prepaidClockActive()) {
+                $session->prepaid_as_timer = true;
+            }
             $session->clearAlert();
             $session->save();
 
@@ -223,6 +287,9 @@ class TableController extends Controller
             'items_total' => $itemsTotal,
             'grand_total' => round(max(0, $itemsTotal), 2),
             'time_blocks' => TableTimeBilling::blocks(),
+            'billing_mode' => $session->billing_mode ?? 'timer',
+            'prepaid_amount' => (float) ($session->prepaid_amount ?? 0),
+            'prepaid_as_timer' => (bool) ($session->prepaid_as_timer ?? false),
         ]);
     }
 
@@ -235,12 +302,19 @@ class TableController extends Controller
                 throw ValidationException::withMessages(['table' => 'No active session to end.']);
             }
 
-            $blocks = TableTimeBilling::parseOrFail($request->input('time_blocks'));
+            $prepaid = $session->isPrepaid();
+            // Prepaid time was paid at the start. Ending only collects unpaid items.
+            $blocks = $prepaid
+                ? ['counts' => [], 'time_total' => 0.0, 'total_minutes' => 0]
+                : TableTimeBilling::parseOrFail($request->input('time_blocks'));
             $endedAt = now('UTC');
             $playedSeconds = $session->playedSeconds($endedAt);
-            $timeTotal = $blocks['time_total'];
+            $extraTimeTotal = $blocks['time_total'];
+            $timeTotal = $prepaid
+                ? round((float) $session->prepaid_amount + $extraTimeTotal, 2)
+                : $extraTimeTotal;
             $itemsTotal = (float) $session->items->sum('total_price');
-            $grandTotal = round(max(0, $timeTotal + $itemsTotal), 2);
+            $grandTotal = round(max(0, ($prepaid ? $extraTimeTotal : $timeTotal) + $itemsTotal), 2);
 
             $normalizedPayments = PaymentPayload::normalizeForTotal(
                 PaymentPayload::fromRequest($request),
@@ -262,24 +336,36 @@ class TableController extends Controller
 
             $receiptId = null;
 
-            DB::transaction(function () use ($session, $table, $endedAt, $blocks, $timeTotal, $itemsTotal, $grandTotal, $validPayments, $customerEmail, $playedSeconds, &$receiptId) {
+            $storedBlocks = $prepaid
+                ? TableTimeBilling::mergeCounts(is_array($session->prepaid_blocks) ? $session->prepaid_blocks : [], $blocks['counts'])
+                : $blocks['counts'];
+            $storedMinutes = $prepaid
+                ? intdiv((int) $session->prepaid_seconds, 60) + $blocks['total_minutes']
+                : $blocks['total_minutes'];
+
+            DB::transaction(function () use ($session, $table, $endedAt, $blocks, $storedBlocks, $storedMinutes, $timeTotal, $itemsTotal, $grandTotal, $validPayments, $customerEmail, $playedSeconds, $prepaid, &$receiptId) {
                 $session->clearAlert();
                 $session->update([
                     'status' => 'completed',
                     'ended_at' => $endedAt,
                     'total_played_seconds' => $playedSeconds,
-                    'total_minutes' => $blocks['total_minutes'],
+                    'total_minutes' => $storedMinutes,
                     'time_total' => $timeTotal,
-                    'time_blocks' => $blocks['counts'],
+                    'time_blocks' => $storedBlocks,
                     'alert_at_played_seconds' => null,
                 ]);
 
                 $table->update(['status' => 'available']);
 
+                if ($prepaid && $grandTotal <= 0) {
+                    return;
+                }
+
+                $receiptTime = $prepaid ? $blocks['time_total'] : $timeTotal;
                 $receipt = Receipt::create([
                     'game_session_id' => $session->id,
                     'receipt_number' => 'R-'.Str::ulid(),
-                    'time_total' => $timeTotal,
+                    'time_total' => $receiptTime,
                     'products_total' => $itemsTotal,
                     'grand_total' => $grandTotal,
                     'customer_email' => $customerEmail,
@@ -296,11 +382,34 @@ class TableController extends Controller
                         'amount' => $p['amount'],
                     ]);
                 }
+
+                if ($prepaid) {
+                    $session->setRelation('table', $table);
+                    $lines = $blocks['total_minutes'] > 0
+                        ? ReceiptPresenter::timeLinesFor($session, $blocks['counts'])
+                        : [];
+                    foreach ($session->items as $item) {
+                        $lines[] = [
+                            'type' => 'product',
+                            'description' => $item->product_name ?? 'Item',
+                            'quantity' => (int) $item->quantity,
+                            'unit_price' => (float) $item->unit_price,
+                            'subtotal' => (float) $item->total_price,
+                        ];
+                    }
+                    ReceiptLineItemSnapshot::ensureFromPayload($receipt, $lines);
+                }
             });
+
+            if ($receiptId === null) {
+                return redirect()->back()->with('session_ended', $session->id);
+            }
 
             $receipt = Receipt::findOrFail($receiptId);
             $invoicePayload = ReceiptPresenter::payload($receipt);
-            ReceiptLineItemSnapshot::ensureFromPayload($receipt, $invoicePayload['line_items']);
+            if (! $prepaid) {
+                ReceiptLineItemSnapshot::ensureFromPayload($receipt, $invoicePayload['line_items']);
+            }
 
             return redirect()->back()->with('session_ended', $session->id)->with('receipt', $invoicePayload);
         });
@@ -313,6 +422,10 @@ class TableController extends Controller
 
             if (! $session) {
                 throw ValidationException::withMessages(['table' => 'No active session to move.']);
+            }
+
+            if ($session->isPrepaid()) {
+                throw ValidationException::withMessages(['table' => 'Prepaid time is already paid. End this table instead of moving it to a tab.']);
             }
 
             $blocks = TableTimeBilling::parseOrFail($request->input('time_blocks'));
@@ -400,5 +513,76 @@ class TableController extends Controller
     {
         $product = Product::findOrFail($productId);
         PosItemUpserter::upsertProduct($session, $product, $quantity);
+    }
+
+    /**
+     * Take payment for prepaid blocks and start or extend the countdown.
+     *
+     * @return array<string, mixed>
+     */
+    private function collectPrepaid(Request $request, GameSession $session, bool $extend): array
+    {
+        $parsed = TableTimeBilling::parseOrFail($request->input('time_blocks'));
+        if ($parsed['total_minutes'] <= 0) {
+            throw ValidationException::withMessages(['time_blocks' => 'Select at least one time block.']);
+        }
+
+        $amount = $parsed['time_total'];
+        $normalized = PaymentPayload::normalizeForTotal(
+            PaymentPayload::fromRequest($request),
+            $amount,
+            allowOverpay: true,
+        );
+        if ($normalized['error'] === 'minimum_total_required') {
+            throw ValidationException::withMessages(['payments' => 'Total paid must cover the prepaid time.']);
+        }
+        if ($normalized['error'] === 'card_transfer_exceeds') {
+            throw ValidationException::withMessages(['payments' => 'Card and transfer combined cannot exceed the prepaid amount.']);
+        }
+
+        $customerEmail = $request->input('customer_email') ? trim((string) $request->input('customer_email')) : null;
+        if ($customerEmail === '') {
+            $customerEmail = null;
+        }
+
+        $merged = TableTimeBilling::mergeCounts(
+            $extend && is_array($session->prepaid_blocks) ? $session->prepaid_blocks : [],
+            $parsed['counts'],
+        );
+        $session->setAlertFromBlocks($parsed['counts'], $extend);
+        $session->fill([
+            'billing_mode' => 'prepaid',
+            'prepaid_as_timer' => false,
+            'prepaid_blocks' => $merged,
+            'prepaid_seconds' => TableTimeBilling::secondsForBlocks($merged),
+            'prepaid_amount' => round((float) $session->prepaid_amount + $amount, 2),
+            'time_blocks' => $merged,
+            'time_total' => round((float) $session->prepaid_amount + $amount, 2),
+        ]);
+        $session->save();
+
+        $now = now('UTC');
+        $receipt = Receipt::create([
+            'game_session_id' => $session->id,
+            'receipt_number' => 'R-'.Str::ulid(),
+            'time_total' => $amount,
+            'products_total' => 0,
+            'grand_total' => $amount,
+            'customer_email' => $customerEmail,
+            'paid_at' => $now,
+            'status' => 'paid',
+        ]);
+        foreach ($normalized['payments'] as $payment) {
+            ReceiptPayment::create([
+                'receipt_id' => $receipt->id,
+                'method' => $payment['method'],
+                'amount' => $payment['amount'],
+            ]);
+        }
+
+        $lines = ReceiptPresenter::timeLinesFor($session, $parsed['counts']);
+        ReceiptLineItemSnapshot::ensureFromPayload($receipt, $lines);
+
+        return ReceiptPresenter::payload($receipt->fresh(['lineItems', 'payments']));
     }
 }

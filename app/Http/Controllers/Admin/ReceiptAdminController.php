@@ -8,6 +8,7 @@ use App\Models\ReceiptLineItem;
 use App\Models\ReceiptPayment;
 use App\Support\PosDate;
 use App\Support\PosTransaction;
+use App\Support\ReceiptPresenter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -18,7 +19,16 @@ class ReceiptAdminController extends Controller
 {
     public function show(Receipt $receipt)
     {
-        $receipt->load(['payments', 'lineItems']);
+        $receipt->load([
+            'payments',
+            'lineItems',
+            'checkoutSession.items',
+            'checkoutSession.gameSessions.table',
+            'checkoutSession.gameSessions.items',
+        ]);
+        $tabComponents = $receipt->checkoutSession
+            ? ReceiptPresenter::checkoutComponents($receipt->checkoutSession)
+            : [];
 
         return response()->json([
             'id' => $receipt->id,
@@ -31,15 +41,23 @@ class ReceiptAdminController extends Controller
             'grand_total' => (float) $receipt->grand_total,
             'voided_at' => optional($receipt->voided_at)->toIso8601String(),
             'void_reason' => $receipt->void_reason,
-            'line_items' => $receipt->lineItems->map(fn (ReceiptLineItem $li) => [
-                'id' => $li->id,
-                'type' => $li->type,
-                'description' => $li->description,
-                'quantity' => (float) $li->quantity,
-                'unit_price' => (float) $li->unit_price,
-                'subtotal' => (float) $li->subtotal,
-                'meta' => $li->meta,
-            ])->values()->all(),
+            'line_items' => $receipt->lineItems->map(function (ReceiptLineItem $li) use ($tabComponents) {
+                $row = [
+                    'id' => $li->id,
+                    'type' => $li->type,
+                    'description' => $li->description,
+                    'quantity' => (float) $li->quantity,
+                    'unit_price' => (float) $li->unit_price,
+                    'subtotal' => (float) $li->subtotal,
+                    'meta' => $li->meta,
+                ];
+
+                if (in_array($li->type, ['partial', 'balance'], true)) {
+                    $row['components'] = $tabComponents;
+                }
+
+                return $row;
+            })->values()->all(),
             'payments' => $receipt->payments->map(fn (ReceiptPayment $p) => [
                 'id' => $p->id,
                 'method' => $p->method,

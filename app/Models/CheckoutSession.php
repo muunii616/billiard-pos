@@ -15,6 +15,7 @@ class CheckoutSession extends Model
     protected $fillable = [
         'status',
         'completed_at',
+        'latest_tab_at',
         'void_reason',
         'voided_by_user_id',
         'stock_restored',
@@ -22,6 +23,7 @@ class CheckoutSession extends Model
 
     protected $casts = [
         'completed_at' => 'datetime',
+        'latest_tab_at' => 'datetime',
         'stock_restored' => 'boolean',
     ];
 

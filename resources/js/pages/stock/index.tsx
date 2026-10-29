@@ -2,6 +2,7 @@ import { Head, router, usePage } from '@inertiajs/react';
 import {
     AlertTriangle,
     Boxes,
+    Download,
     Minus,
     PackageOpen,
     Plus,
@@ -31,7 +32,8 @@ import {
 } from '@/components/ui/select';
 import AppLayout from '@/layouts/app-layout';
 import { categoryBadgeClass, normalizeCategory } from '@/lib/categories';
-import { formatDateTime } from '@/lib/dates';
+import { businessDate, formatDateTime } from '@/lib/dates';
+import { useCategoryLabel, useI18n } from '@/lib/i18n';
 import { formatMoney } from '@/lib/payments';
 import { posPanelClass } from '@/lib/pos-ui';
 import { cn } from '@/lib/utils';
@@ -52,8 +54,8 @@ type StockProduct = {
 type ActivityRow = {
     id: number;
     kind: 'adjustment' | 'external';
-    product_name: string;
-    user_name: string;
+    product_name: string | null;
+    user_name: string | null;
     quantity: number;
     stock_after: number | null;
     note: string | null;
@@ -105,10 +107,76 @@ export default function StockIndex({
     users,
     isAdmin,
 }: Props) {
+    const { t } = useI18n();
+    const categoryLabel = useCategoryLabel();
     const page = usePage();
     const authRole = (page.props as { auth?: { user?: { role?: string } } })
         ?.auth?.user?.role;
     const adminEnabled = isAdmin || authRole === 'admin';
+    const today = businessDate();
+    const [downloadOpen, setDownloadOpen] = useState(false);
+    const [downloadPeriod, setDownloadPeriod] = useState<
+        'daily' | 'range' | 'monthly'
+    >('daily');
+    const [downloadFrom, setDownloadFrom] = useState(today);
+    const [downloadTo, setDownloadTo] = useState(today);
+    const [downloadMonth, setDownloadMonth] = useState(today.slice(0, 7));
+    const [downloading, setDownloading] = useState(false);
+    const [downloadError, setDownloadError] = useState<string | null>(null);
+
+    const downloadReport = async () => {
+        setDownloading(true);
+        setDownloadError(null);
+        const params = new URLSearchParams({ period: downloadPeriod });
+
+        if (downloadPeriod === 'monthly') {
+            params.set('month', downloadMonth);
+        } else if (downloadPeriod === 'daily') {
+            params.set('date', downloadFrom);
+        } else {
+            params.set('from', downloadFrom);
+            params.set('to', downloadTo);
+        }
+
+        try {
+            const response = await fetch(`/stock/download?${params}`, {
+                headers: { Accept: 'application/pdf, application/json' },
+                credentials: 'same-origin',
+            });
+
+            if (
+                !response.ok ||
+                !response.headers
+                    .get('Content-Type')
+                    ?.includes('application/pdf')
+            ) {
+                const error = await response.json().catch(() => ({}));
+
+                throw new Error(
+                    (error as { message?: string }).message ||
+                        'Could not download the inventory report.',
+                );
+            }
+
+            const url = URL.createObjectURL(await response.blob());
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `inventory-${downloadPeriod}-${downloadPeriod === 'monthly' ? downloadMonth : downloadFrom}${downloadPeriod === 'range' ? `-to-${downloadTo}` : ''}.pdf`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+            setDownloadOpen(false);
+        } catch (downloadFailure) {
+            setDownloadError(
+                downloadFailure instanceof Error
+                    ? downloadFailure.message
+                    : t('Could not download the inventory report.'),
+            );
+        } finally {
+            setDownloading(false);
+        }
+    };
     const money = formatMoney;
 
     const [search, setSearch] = useState('');
@@ -134,7 +202,11 @@ export default function StockIndex({
     const categories = useMemo(
         () =>
             Array.from(
-                new Set(products.map((product) => normalizeCategory(product.category))),
+                new Set(
+                    products.map((product) =>
+                        normalizeCategory(product.category),
+                    ),
+                ),
             ).sort(),
         [products],
     );
@@ -143,7 +215,10 @@ export default function StockIndex({
         const query = search.trim().toLowerCase();
 
         return products.filter((product) => {
-            if (category !== 'all' && normalizeCategory(product.category) !== category) {
+            if (
+                category !== 'all' &&
+                normalizeCategory(product.category) !== category
+            ) {
                 return false;
             }
 
@@ -169,10 +244,13 @@ export default function StockIndex({
 
             return (
                 product.name.toLowerCase().includes(query) ||
-                product.category.toLowerCase().includes(query)
+                product.category.toLowerCase().includes(query) ||
+                categoryLabel(normalizeCategory(product.category))
+                    .toLowerCase()
+                    .includes(query)
             );
         });
-    }, [category, filter, products, search]);
+    }, [category, categoryLabel, filter, products, search]);
 
     const pendingItems = useMemo(
         () =>
@@ -207,7 +285,8 @@ export default function StockIndex({
     };
 
     const bumpDelta = (productId: number, step: number) => {
-        const current = Number.parseInt(draftChanges[productId] ?? '0', 10) || 0;
+        const current =
+            Number.parseInt(draftChanges[productId] ?? '0', 10) || 0;
         const next = current + step;
 
         if (!adminEnabled && next < 0) {
@@ -261,7 +340,12 @@ export default function StockIndex({
         const quantity = Number.parseInt(externalQty, 10);
         const userId = Number(externalUserId);
 
-        if (!productId || !userId || !Number.isFinite(quantity) || quantity < 1) {
+        if (
+            !productId ||
+            !userId ||
+            !Number.isFinite(quantity) ||
+            quantity < 1
+        ) {
             setExternalError('Pick a product, staff member, and quantity.');
 
             return;
@@ -297,12 +381,24 @@ export default function StockIndex({
 
     return (
         <AppLayout breadcrumbs={[]}>
-            <Head title="Stock" />
+            <Head title={t('Stock')} />
             <div className="flex flex-1 flex-col gap-4 p-4">
                 <PageHeader
-                    title="Stock"
-                    description="See what’s on the shelf, top up fast, and catch low inventory before a rush."
+                    title={t('Stock')}
+                    description={t(
+                        'See what’s on the shelf, top up fast, and catch low inventory before a rush.',
+                    )}
                 >
+                    <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                            setDownloadError(null);
+                            setDownloadOpen(true);
+                        }}
+                    >
+                        <Download className="h-4 w-4" /> {t('Inventory report')}
+                    </Button>
                     <Button
                         type="button"
                         variant="outline"
@@ -311,7 +407,7 @@ export default function StockIndex({
                             setExternalOpen(true);
                         }}
                     >
-                        External use
+                        {t('External use')}
                     </Button>
                     <Button
                         type="button"
@@ -319,12 +415,160 @@ export default function StockIndex({
                         onClick={saveAdjustments}
                     >
                         {saving
-                            ? 'Saving…'
+                            ? t('Saving…')
                             : pendingItems.length > 0
-                              ? `Save ${pendingItems.length} change${pendingItems.length === 1 ? '' : 's'}`
-                              : 'Save changes'}
+                              ? t(
+                                    pendingItems.length === 1
+                                        ? 'Save 1 change'
+                                        : 'Save {count} changes',
+                                    {
+                                        count: pendingItems.length,
+                                    },
+                                )
+                              : t('Save changes')}
                     </Button>
                 </PageHeader>
+
+                <Dialog
+                    open={downloadOpen}
+                    onOpenChange={(open) => {
+                        if (!downloading) {
+                            setDownloadOpen(open);
+                        }
+                    }}
+                >
+                    <DialogContent>
+                        <DialogHeader>
+                            <DialogTitle>
+                                {t('Download inventory overview')}
+                            </DialogTitle>
+                            <DialogDescription>
+                                {t(
+                                    'Choose a day, an inclusive date range, or a whole month. The PDF shows the count at the start, what’s on hand at the end, and the difference. First stock is the amount entered when the product was added.',
+                                )}
+                            </DialogDescription>
+                        </DialogHeader>
+                        <form
+                            className="space-y-4"
+                            onSubmit={(event) => {
+                                event.preventDefault();
+                                void downloadReport();
+                            }}
+                        >
+                            <div className="space-y-2">
+                                <Label htmlFor="inventory-period">
+                                    {t('Report period')}
+                                </Label>
+                                <Select
+                                    value={downloadPeriod}
+                                    onValueChange={(value) =>
+                                        setDownloadPeriod(
+                                            value as typeof downloadPeriod,
+                                        )
+                                    }
+                                    disabled={downloading}
+                                >
+                                    <SelectTrigger id="inventory-period">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="daily">
+                                            {t('Single day')}
+                                        </SelectItem>
+                                        <SelectItem value="range">
+                                            {t('Date range')}
+                                        </SelectItem>
+                                        <SelectItem value="monthly">
+                                            {t('Whole month')}
+                                        </SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            {downloadPeriod === 'monthly' ? (
+                                <div className="space-y-2">
+                                    <Label htmlFor="inventory-month">
+                                        {t('Month')}
+                                    </Label>
+                                    <Input
+                                        id="inventory-month"
+                                        type="month"
+                                        required
+                                        value={downloadMonth}
+                                        onChange={(event) =>
+                                            setDownloadMonth(event.target.value)
+                                        }
+                                        disabled={downloading}
+                                    />
+                                </div>
+                            ) : (
+                                <div className="space-y-4">
+                                    <div className="space-y-2">
+                                        <Label htmlFor="inventory-from">
+                                            {downloadPeriod === 'range'
+                                                ? t('Start date')
+                                                : t('Date')}
+                                        </Label>
+                                        <Input
+                                            id="inventory-from"
+                                            type="date"
+                                            required
+                                            value={downloadFrom}
+                                            onChange={(event) =>
+                                                setDownloadFrom(
+                                                    event.target.value,
+                                                )
+                                            }
+                                            disabled={downloading}
+                                        />
+                                    </div>
+                                    {downloadPeriod === 'range' && (
+                                        <div className="space-y-2">
+                                            <Label htmlFor="inventory-to">
+                                                {t('End date (included)')}
+                                            </Label>
+                                            <Input
+                                                id="inventory-to"
+                                                type="date"
+                                                required
+                                                min={downloadFrom}
+                                                value={downloadTo}
+                                                onChange={(event) =>
+                                                    setDownloadTo(
+                                                        event.target.value,
+                                                    )
+                                                }
+                                                disabled={downloading}
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                            {downloadError && (
+                                <p
+                                    role="alert"
+                                    className="text-sm text-destructive"
+                                >
+                                    {t(downloadError)}
+                                </p>
+                            )}
+                            <DialogFooter>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    disabled={downloading}
+                                    onClick={() => setDownloadOpen(false)}
+                                >
+                                    {t('Cancel')}
+                                </Button>
+                                <Button type="submit" disabled={downloading}>
+                                    {downloading
+                                        ? t('Preparing PDF…')
+                                        : t('Download PDF')}
+                                </Button>
+                            </DialogFooter>
+                        </form>
+                    </DialogContent>
+                </Dialog>
 
                 {(error || message) && (
                     <div
@@ -335,32 +579,34 @@ export default function StockIndex({
                                 : 'border-emerald-600/30 bg-emerald-600/10 text-emerald-800 dark:text-emerald-300',
                         )}
                     >
-                        {error || message}
+                        {t(error || message || '')}
                     </div>
                 )}
 
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                     <div className={`${posPanelClass} p-4`}>
                         <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                            On hand
+                            {t('On hand')}
                         </div>
                         <div className="mt-1 text-3xl font-semibold tabular-nums">
                             {summary.units_on_hand}
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground">
-                            {summary.sku_count} products ·{' '}
-                            {money(summary.inventory_value)} at cost
+                            {t('{count} products · {value} at cost', {
+                                count: summary.sku_count,
+                                value: money(summary.inventory_value),
+                            })}
                         </div>
                     </div>
                     <div className={`${posPanelClass} p-4`}>
                         <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                            Healthy
+                            {t('Healthy')}
                         </div>
-                        <div className="mt-1 text-3xl font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+                        <div className="mt-1 text-3xl font-semibold text-emerald-700 tabular-nums dark:text-emerald-400">
                             {summary.ok_count}
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground">
-                            Above low-stock alert
+                            {t('Above low-stock alert')}
                         </div>
                     </div>
                     <button
@@ -369,13 +615,13 @@ export default function StockIndex({
                         onClick={() => setFilter('low')}
                     >
                         <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                            Low stock
+                            {t('Low stock')}
                         </div>
-                        <div className="mt-1 text-3xl font-semibold tabular-nums text-amber-600 dark:text-amber-400">
+                        <div className="mt-1 text-3xl font-semibold text-amber-600 tabular-nums dark:text-amber-400">
                             {summary.low_count}
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground">
-                            Tap to filter
+                            {t('Tap to filter')}
                         </div>
                     </button>
                     <button
@@ -384,19 +630,21 @@ export default function StockIndex({
                         onClick={() => setFilter('out')}
                     >
                         <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                            Out of stock
+                            {t('Out of stock')}
                         </div>
-                        <div className="mt-1 text-3xl font-semibold tabular-nums text-rose-600 dark:text-rose-400">
+                        <div className="mt-1 text-3xl font-semibold text-rose-600 tabular-nums dark:text-rose-400">
                             {summary.out_count}
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground">
-                            Tap to filter
+                            {t('Tap to filter')}
                         </div>
                     </button>
                 </div>
 
                 <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
-                    <div className={`${posPanelClass} flex min-h-[28rem] flex-col`}>
+                    <div
+                        className={`${posPanelClass} flex min-h-[28rem] flex-col`}
+                    >
                         <div className="flex flex-col gap-3 border-b border-border/70 p-3 sm:flex-row sm:items-center">
                             <div className="relative min-w-0 flex-1">
                                 <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -405,7 +653,7 @@ export default function StockIndex({
                                     onChange={(event) =>
                                         setSearch(event.target.value)
                                     }
-                                    placeholder="Search products…"
+                                    placeholder={t('Search products…')}
                                     className="pl-9"
                                 />
                             </div>
@@ -424,11 +672,13 @@ export default function StockIndex({
                                         type="button"
                                         size="sm"
                                         variant={
-                                            filter === key ? 'default' : 'outline'
+                                            filter === key
+                                                ? 'default'
+                                                : 'outline'
                                         }
                                         onClick={() => setFilter(key)}
                                     >
-                                        {label}
+                                        {t(label)}
                                     </Button>
                                 ))}
                             </div>
@@ -438,10 +688,12 @@ export default function StockIndex({
                             <Button
                                 type="button"
                                 size="sm"
-                                variant={category === 'all' ? 'secondary' : 'ghost'}
+                                variant={
+                                    category === 'all' ? 'secondary' : 'ghost'
+                                }
                                 onClick={() => setCategory('all')}
                             >
-                                All categories
+                                {t('All categories')}
                             </Button>
                             {categories.map((name) => (
                                 <Button
@@ -449,11 +701,13 @@ export default function StockIndex({
                                     type="button"
                                     size="sm"
                                     variant={
-                                        category === name ? 'secondary' : 'ghost'
+                                        category === name
+                                            ? 'secondary'
+                                            : 'ghost'
                                     }
                                     onClick={() => setCategory(name)}
                                 >
-                                    {name}
+                                    {categoryLabel(name)}
                                 </Button>
                             ))}
                         </div>
@@ -463,15 +717,18 @@ export default function StockIndex({
                                 <div className="p-6">
                                     <EmptyState
                                         icon={PackageOpen}
-                                        title="No products match"
-                                        description="Try another filter or search."
+                                        title={t('No products match')}
+                                        description={t(
+                                            'Try another filter or search.',
+                                        )}
                                     />
                                 </div>
                             ) : (
                                 <ul className="divide-y divide-border/70">
                                     {filtered.map((product) => {
                                         const fill = stockFillPercent(product);
-                                        const draft = draftChanges[product.id] ?? '';
+                                        const draft =
+                                            draftChanges[product.id] ?? '';
 
                                         return (
                                             <li
@@ -486,9 +743,14 @@ export default function StockIndex({
                                                         <span
                                                             className={`inline-flex h-5 items-center rounded-full px-2 text-[10px] font-semibold tracking-wide uppercase ${categoryBadgeClass(product.category)}`}
                                                         >
-                                                            {product.category}
+                                                            {categoryLabel(
+                                                                normalizeCategory(
+                                                                    product.category,
+                                                                ),
+                                                            )}
                                                         </span>
-                                                        {product.status !== 'ok' && (
+                                                        {product.status !==
+                                                            'ok' && (
                                                             <Badge
                                                                 variant={
                                                                     product.status ===
@@ -501,31 +763,33 @@ export default function StockIndex({
                                                                 <AlertTriangle className="h-3 w-3" />
                                                                 {product.status ===
                                                                 'out'
-                                                                    ? 'Out'
-                                                                    : 'Low'}
+                                                                    ? t('Out')
+                                                                    : t('Low')}
                                                             </Badge>
                                                         )}
                                                         {!product.is_active && (
                                                             <Badge variant="outline">
-                                                                Inactive
+                                                                {t('Inactive')}
                                                             </Badge>
                                                         )}
                                                     </div>
                                                     <div className="mt-2">
                                                         <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
                                                             <span>
-                                                                {product.stock_quantity}{' '}
-                                                                on hand
+                                                                {
+                                                                    product.stock_quantity
+                                                                }{' '}
+                                                                {t('on hand')}
                                                                 <span className="mx-1">
                                                                     ·
                                                                 </span>
-                                                                alert at{' '}
+                                                                {t('alert at')}{' '}
                                                                 {
                                                                     product.low_stock_threshold
                                                                 }
                                                             </span>
                                                             <span className="tabular-nums">
-                                                                Sell{' '}
+                                                                {t('Sell')}{' '}
                                                                 {money(
                                                                     product.price,
                                                                 )}
@@ -563,8 +827,12 @@ export default function StockIndex({
                                                         }
                                                         title={
                                                             adminEnabled
-                                                                ? 'Decrease draft'
-                                                                : 'Only admins can decrease stock'
+                                                                ? t(
+                                                                      'Decrease draft',
+                                                                  )
+                                                                : t(
+                                                                      'Only admins can decrease stock',
+                                                                  )
                                                         }
                                                     >
                                                         <Minus className="h-4 w-4" />
@@ -576,13 +844,18 @@ export default function StockIndex({
                                                         placeholder="0"
                                                         title={
                                                             adminEnabled
-                                                                ? 'Change (+ receive / − remove)'
-                                                                : 'Enter positive amount to add stock'
+                                                                ? t(
+                                                                      'Change (+ receive / − remove)',
+                                                                  )
+                                                                : t(
+                                                                      'Enter positive amount to add stock',
+                                                                  )
                                                         }
                                                         onChange={(event) => {
                                                             const value =
                                                                 event.target
                                                                     .value;
+
                                                             if (
                                                                 !adminEnabled &&
                                                                 Number(value) <
@@ -594,6 +867,7 @@ export default function StockIndex({
 
                                                                 return;
                                                             }
+
                                                             setDelta(
                                                                 product.id,
                                                                 value,
@@ -612,7 +886,9 @@ export default function StockIndex({
                                                                 1,
                                                             )
                                                         }
-                                                        title="Increase draft"
+                                                        title={t(
+                                                            'Increase draft',
+                                                        )}
                                                     >
                                                         <Plus className="h-4 w-4" />
                                                     </Button>
@@ -625,22 +901,24 @@ export default function StockIndex({
                         </div>
                     </div>
 
-                    <div className={`${posPanelClass} flex min-h-[28rem] flex-col`}>
+                    <div
+                        className={`${posPanelClass} flex min-h-[28rem] flex-col`}
+                    >
                         <div className="flex items-center gap-2 border-b border-border/70 px-3 py-3">
                             <Boxes className="h-4 w-4 text-muted-foreground" />
                             <div>
                                 <div className="text-sm font-semibold">
-                                    Recent movement
+                                    {t('Recent movement')}
                                 </div>
                                 <div className="text-xs text-muted-foreground">
-                                    Adjustments and external use
+                                    {t('Adjustments and external use')}
                                 </div>
                             </div>
                         </div>
                         <div className="min-h-0 flex-1 overflow-y-auto">
                             {activity.length === 0 ? (
                                 <div className="p-4 text-sm text-muted-foreground">
-                                    No stock movement recorded yet.
+                                    {t('No stock movement recorded yet.')}
                                 </div>
                             ) : (
                                 <ul className="divide-y divide-border/60">
@@ -652,13 +930,20 @@ export default function StockIndex({
                                             <div className="flex items-start justify-between gap-2">
                                                 <div className="min-w-0">
                                                     <div className="truncate font-medium">
-                                                        {row.product_name}
+                                                        {row.product_name ??
+                                                            t(
+                                                                'Deleted product',
+                                                            )}
                                                     </div>
                                                     <div className="text-xs text-muted-foreground">
                                                         {row.kind === 'external'
-                                                            ? 'External use'
-                                                            : 'Adjustment'}{' '}
-                                                        · {row.user_name}
+                                                            ? t('External use')
+                                                            : t(
+                                                                  'Adjustment',
+                                                              )}{' '}
+                                                        ·{' '}
+                                                        {row.user_name ??
+                                                            t('Unknown')}
                                                     </div>
                                                 </div>
                                                 <div
@@ -669,7 +954,9 @@ export default function StockIndex({
                                                             : 'text-emerald-700 dark:text-emerald-400',
                                                     )}
                                                 >
-                                                    {row.quantity > 0 ? '+' : ''}
+                                                    {row.quantity > 0
+                                                        ? '+'
+                                                        : ''}
                                                     {row.quantity}
                                                 </div>
                                             </div>
@@ -678,10 +965,10 @@ export default function StockIndex({
                                                     ? formatDateTime(row.at)
                                                     : '—'}
                                                 {row.stock_after != null
-                                                    ? ` · now ${row.stock_after}`
+                                                    ? ` · ${t('Now {count}', { count: row.stock_after })}`
                                                     : ''}
                                                 {row.note
-                                                    ? ` · ${row.note}`
+                                                    ? ` · ${row.note === 'Initial stock' ? t('Initial stock') : row.note}`
                                                     : ''}
                                             </div>
                                         </li>
@@ -697,6 +984,7 @@ export default function StockIndex({
                 open={externalOpen}
                 onOpenChange={(open) => {
                     setExternalOpen(open);
+
                     if (!open) {
                         setExternalError(null);
                     }
@@ -704,21 +992,24 @@ export default function StockIndex({
             >
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>
-                        <DialogTitle>External use</DialogTitle>
+                        <DialogTitle>{t('External use')}</DialogTitle>
                         <DialogDescription>
-                            Deduct stock used outside a sale — staff drinks,
-                            breakage, or house use.
+                            {t(
+                                'Deduct stock used outside a sale — staff drinks, breakage, or house use.',
+                            )}
                         </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-3">
                         <div className="space-y-1.5">
-                            <Label>Staff member</Label>
+                            <Label>{t('Staff member')}</Label>
                             <Select
                                 value={externalUserId}
                                 onValueChange={setExternalUserId}
                             >
                                 <SelectTrigger>
-                                    <SelectValue placeholder="Select staff" />
+                                    <SelectValue
+                                        placeholder={t('Select staff')}
+                                    />
                                 </SelectTrigger>
                                 <SelectContent>
                                     {users.map((user) => (
@@ -733,13 +1024,15 @@ export default function StockIndex({
                             </Select>
                         </div>
                         <div className="space-y-1.5">
-                            <Label>Product</Label>
+                            <Label>{t('Product')}</Label>
                             <Select
                                 value={externalProductId}
                                 onValueChange={setExternalProductId}
                             >
                                 <SelectTrigger>
-                                    <SelectValue placeholder="Select product" />
+                                    <SelectValue
+                                        placeholder={t('Select product')}
+                                    />
                                 </SelectTrigger>
                                 <SelectContent>
                                     {products.map((product) => (
@@ -755,7 +1048,7 @@ export default function StockIndex({
                             </Select>
                         </div>
                         <div className="space-y-1.5">
-                            <Label>Quantity</Label>
+                            <Label>{t('Quantity')}</Label>
                             <Input
                                 type="number"
                                 min={1}
@@ -767,18 +1060,18 @@ export default function StockIndex({
                             />
                         </div>
                         <div className="space-y-1.5">
-                            <Label>Note (optional)</Label>
+                            <Label>{t('Note (optional)')}</Label>
                             <Input
                                 value={externalNote}
                                 onChange={(event) =>
                                     setExternalNote(event.target.value)
                                 }
-                                placeholder="Staff drink, spill, etc."
+                                placeholder={t('Staff drink, spill, etc.')}
                             />
                         </div>
                         {externalError && (
                             <p className="text-sm text-destructive">
-                                {externalError}
+                                {t(externalError)}
                             </p>
                         )}
                     </div>
@@ -789,14 +1082,14 @@ export default function StockIndex({
                             onClick={() => setExternalOpen(false)}
                             disabled={externalSaving}
                         >
-                            Cancel
+                            {t('Cancel')}
                         </Button>
                         <Button
                             type="button"
                             onClick={submitExternalUse}
                             disabled={externalSaving}
                         >
-                            {externalSaving ? 'Saving…' : 'Record use'}
+                            {externalSaving ? t('Saving…') : t('Record use')}
                         </Button>
                     </DialogFooter>
                 </DialogContent>

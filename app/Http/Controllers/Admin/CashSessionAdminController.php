@@ -12,7 +12,9 @@ use App\Models\StockAdjustment;
 use App\Models\StockUsage;
 use App\Support\PosDate;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -21,7 +23,8 @@ class CashSessionAdminController extends Controller
     private function inRangeReceiptQuery(\DateTimeInterface $from, \DateTimeInterface $to)
     {
         return Receipt::paid()
-            ->whereBetween('paid_at', [$from, $to]);
+            ->where('paid_at', '>=', $from)
+            ->where('paid_at', '<', $to);
     }
 
     private function summarizeBetween(\DateTimeInterface $from, \DateTimeInterface $to): array
@@ -58,7 +61,15 @@ class CashSessionAdminController extends Controller
         }
 
         $asOf = $session->status === 'open' ? now() : ($session->closed_at ?? now());
-        $summary = $this->summarizeBetween($session->opened_at ?? $session->created_at, $asOf);
+        $summary = $session->status === 'closed'
+            ? [
+                'receipts_count' => (int) $session->receipts_count,
+                'total_sales' => (float) $session->total_sales,
+                'cash_sales' => (float) $session->cash_sales,
+                'card_sales' => (float) $session->card_sales,
+                'transfer_sales' => (float) $session->transfer_sales,
+            ]
+            : $this->summarizeBetween($session->opened_at ?? $session->created_at, $asOf);
         $expectedCash = round((float) $session->opening_cash + $summary['cash_sales'], 2);
         $variance = $session->status === 'closed'
             ? round((float) $session->variance, 2)
@@ -70,7 +81,7 @@ class CashSessionAdminController extends Controller
             'id' => $session->id,
             'status' => $session->status,
             'opening_cash' => (float) $session->opening_cash,
-            'opened_at' => optional($session->opened_at)->toIso8601String(),
+            'opened_at' => ($session->opened_at ?? $session->created_at)?->toIso8601String(),
             'closed_at' => optional($session->closed_at)->toIso8601String(),
             'counted_cash' => $session->counted_cash !== null ? (float) $session->counted_cash : null,
             'expected_cash' => $expectedCash,
@@ -82,11 +93,12 @@ class CashSessionAdminController extends Controller
             'card_sales' => $summary['card_sales'],
             'transfer_sales' => $summary['transfer_sales'],
             'opened_by' => $session->openedBy?->name,
+            'opened_by_user_id' => $session->opened_by_user_id,
             'closed_by' => $session->closedBy?->name,
         ];
     }
 
-    public function current()
+    public function current(Request $request)
     {
         $open = CashSession::query()->where('status', 'open')->latest('id')->first();
         $query = CashSession::query()->with(['openedBy', 'closedBy'])->where('status', 'closed');
@@ -97,14 +109,18 @@ class CashSessionAdminController extends Controller
             if (preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $month)) {
                 [$year, $monthNumber] = array_map('intval', explode('-', $month));
                 $start = PosDate::month(sprintf('%04d-%02d', $year, $monthNumber));
-                $query->whereBetween('closed_at', [$start->utc(), $start->endOfMonth()->utc()]);
+                $query->whereRaw('COALESCE(opened_at, created_at) >= ?', [$start->utc()])
+                    ->whereRaw('COALESCE(opened_at, created_at) < ?', [$start->addMonth()->utc()]);
             }
         }
-        $history = $query->latest('closed_at')->paginate(10)->withQueryString();
+        $history = $query->orderByRaw('COALESCE(opened_at, created_at) DESC')->orderByDesc('id')->paginate(10)->withQueryString();
         $users = CashSession::query()->where('status', 'closed')->with('openedBy')->get()->pluck('openedBy.name')->filter()->unique()->sort()->values();
 
         return response()->json([
             'open_session' => $this->presentSession($open),
+            'needs_handover' => $open
+                && (int) $open->opened_by_user_id !== (int) $request->user()->id
+                && $request->session()->get('register.continued') !== [$request->user()->id, $open->id],
             'history' => [
                 'data' => $history->getCollection()->map(fn ($session) => $this->presentSession($session))->values(),
                 'current_page' => $history->currentPage(),
@@ -122,7 +138,7 @@ class CashSessionAdminController extends Controller
         ]);
 
         try {
-            $session = DB::transaction(function () use ($request, $data) {
+            $session = $this->transition(function () use ($request, $data) {
                 $existingOpen = CashSession::query()->where('status', 'open')->lockForUpdate()->first();
                 if ($existingOpen) {
                     throw ValidationException::withMessages([
@@ -130,21 +146,7 @@ class CashSessionAdminController extends Controller
                     ]);
                 }
 
-                $session = CashSession::query()->create([
-                    'status' => 'open',
-                    'opening_cash' => round((float) $data['opening_cash'], 2),
-                    'opened_at' => now('UTC'),
-                    'opened_by_user_id' => $request->user()?->id,
-                ]);
-                foreach (Product::query()->get(['id', 'stock_quantity']) as $product) {
-                    CashSessionProductStock::create([
-                        'cash_session_id' => $session->id,
-                        'product_id' => $product->id,
-                        'opening_stock' => $product->stock_quantity,
-                    ]);
-                }
-
-                return $session;
+                return $this->createShift($request, (float) $data['opening_cash'], now('UTC')->startOfSecond());
             });
         } catch (ValidationException $e) {
             return response()->json([
@@ -160,17 +162,99 @@ class CashSessionAdminController extends Controller
 
     public function close(Request $request)
     {
-        $session = CashSession::query()->where('status', 'open')->latest('id')->first();
-        if (! $session) {
-            return response()->json(['message' => 'No open shift to close.'], 422);
-        }
-
         $data = $request->validate([
+            'session_id' => ['required', 'integer'],
             'counted_cash' => ['required', 'numeric', 'min:0'],
             'variance_reason' => ['nullable', 'string', 'max:2000'],
         ]);
 
-        $closedAt = now('UTC');
+        $session = $this->transition(function () use ($request, $data) {
+            $session = $this->lockedShift((int) $data['session_id']);
+            $this->closeShift($request, $session, $data, now('UTC')->startOfSecond());
+
+            return $session;
+        });
+
+        return response()->json([
+            'message' => 'Shift closed.',
+            'session' => $this->presentSession($session->fresh(['openedBy', 'closedBy'])),
+            'receipt_url' => route('admin.cash.receipt', ['cashSession' => $session->id]),
+        ]);
+    }
+
+    public function continueShift(Request $request)
+    {
+        $data = $request->validate(['session_id' => ['required', 'integer']]);
+        $session = $this->transition(fn () => $this->lockedShift((int) $data['session_id']));
+        $request->session()->put('register.continued', [$request->user()->id, $session->id]);
+
+        return response()->json(['message' => 'Continuing the current shift.']);
+    }
+
+    public function handover(Request $request)
+    {
+        $data = $request->validate([
+            'session_id' => ['required', 'integer'],
+            'counted_cash' => ['required', 'numeric', 'min:0'],
+            'opening_cash' => ['required', 'numeric', 'min:0'],
+            'variance_reason' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        [$closed, $opened] = $this->transition(function () use ($request, $data) {
+            $closed = $this->lockedShift((int) $data['session_id']);
+            $at = now('UTC')->startOfSecond();
+            $this->closeShift($request, $closed, $data, $at);
+            $opened = $this->createShift($request, (float) $data['opening_cash'], $at);
+
+            return [$closed, $opened];
+        });
+        $request->session()->forget('register.continued');
+
+        return response()->json([
+            'message' => 'Previous shift closed. Your shift is open.',
+            'session' => $this->presentSession($opened->fresh(['openedBy', 'closedBy'])),
+            'receipt_url' => route('admin.cash.receipt', ['cashSession' => $closed->id]),
+        ]);
+    }
+
+    /** Serialize opening as well as closing, including when there is no open row to lock. */
+    private function transition(callable $action): mixed
+    {
+        try {
+            return Cache::lock('cash-register-transition', 60)->block(5, fn () => DB::transaction($action, 3));
+        } catch (LockTimeoutException) {
+            throw ValidationException::withMessages(['shift' => 'The register is being updated. Please try again.']);
+        }
+    }
+
+    private function lockedShift(int $id): CashSession
+    {
+        $session = CashSession::query()->where('status', 'open')->lockForUpdate()->find($id);
+        if (! $session) {
+            throw ValidationException::withMessages(['shift' => 'This shift has changed. Refresh the register and try again.']);
+        }
+
+        return $session;
+    }
+
+    private function createShift(Request $request, float $cash, \DateTimeInterface $at): CashSession
+    {
+        $session = CashSession::create([
+            'status' => 'open', 'opening_cash' => round($cash, 2),
+            'opened_at' => $at, 'opened_by_user_id' => $request->user()->id,
+        ]);
+        foreach (Product::query()->get(['id', 'stock_quantity']) as $product) {
+            CashSessionProductStock::create([
+                'cash_session_id' => $session->id, 'product_id' => $product->id,
+                'opening_stock' => $product->stock_quantity,
+            ]);
+        }
+
+        return $session;
+    }
+
+    private function closeShift(Request $request, CashSession $session, array $data, \DateTimeInterface $closedAt): void
+    {
         $summary = $this->summarizeBetween($session->opened_at ?? $session->created_at, $closedAt);
         $expectedCash = round((float) $session->opening_cash + $summary['cash_sales'], 2);
         $countedCash = round((float) $data['counted_cash'], 2);
@@ -178,7 +262,7 @@ class CashSessionAdminController extends Controller
         $reason = trim((string) ($data['variance_reason'] ?? ''));
 
         if (abs($variance) > 0.0001 && $reason === '') {
-            return response()->json(['message' => 'Reason is required when variance is not zero.'], 422);
+            throw ValidationException::withMessages(['variance_reason' => 'Reason is required when variance is not zero.']);
         }
 
         $session->update([
@@ -199,11 +283,6 @@ class CashSessionAdminController extends Controller
             $snapshot->update(['closing_stock' => Product::find($snapshot->product_id)?->stock_quantity ?? 0]);
         }
 
-        return response()->json([
-            'message' => 'Shift closed.',
-            'session' => $this->presentSession($session->fresh(['openedBy', 'closedBy'])),
-            'receipt_url' => route('admin.cash.receipt', ['cashSession' => $session->id]),
-        ]);
     }
 
     public function receipt(CashSession $cashSession)
@@ -238,11 +317,11 @@ class CashSessionAdminController extends Controller
             ])->values();
         $tableTimeTotal = $receipts->sum('time_total');
         $externalUsages = StockUsage::query()->with(['product', 'user'])
-            ->whereBetween('used_at', [$from, $to])
+            ->where('used_at', '>=', $from)->where('used_at', '<', $to)
             ->orderBy('used_at')
             ->get();
         $stockAdjustments = StockAdjustment::query()->with(['product', 'user'])
-            ->whereBetween('adjusted_at', [$from, $to])->orderBy('adjusted_at')->get();
+            ->where('adjusted_at', '>=', $from)->where('adjusted_at', '<', $to)->orderBy('adjusted_at')->get();
         $stockSnapshots = CashSessionProductStock::query()->with('product')->where('cash_session_id', $cashSession->id)->get();
         $soldByProduct = $receipts->flatMap->lineItems->where('type', 'product')->groupBy('description')->map(fn ($items) => $items->sum('quantity'));
         $usedByProduct = $externalUsages->groupBy('product_id')->map(fn ($items) => $items->sum('quantity'));
@@ -256,7 +335,9 @@ class CashSessionAdminController extends Controller
             return ['product' => $name, 'opening' => $snapshot->opening_stock, 'adjusted' => $adjusted, 'sold' => $sold, 'external' => $used, 'expected' => $snapshot->opening_stock + $adjusted - $sold - $used, 'closing' => $snapshot->closing_stock ?? $snapshot->product->stock_quantity];
         });
 
+        $shiftDate = ($cashSession->opened_at ?? $cashSession->created_at)->copy()->timezone(PosDate::timezone())->toDateString();
         $pdf = Pdf::loadView('pdf.cash-session-receipt', [
+            'shiftDate' => $shiftDate,
             'session' => $cashSession->loadMissing(['openedBy', 'closedBy']),
             'productSales' => $productSales,
             'tableTimeTotal' => $tableTimeTotal,
@@ -267,6 +348,6 @@ class CashSessionAdminController extends Controller
             'logoDataUri' => $logoDataUri,
         ])->setPaper('a4', 'portrait');
 
-        return $pdf->stream('register-shift-'.$cashSession->id.'.pdf');
+        return $pdf->stream('shift-'.$cashSession->id.'-'.$shiftDate.'.pdf');
     }
 }

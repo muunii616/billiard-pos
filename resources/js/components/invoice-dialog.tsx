@@ -6,6 +6,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
+import { useI18n } from '@/lib/i18n';
 
 export type InvoiceLineItem = {
     type: string;
@@ -52,11 +53,28 @@ export default function InvoiceDialog({
     onEmail: () => void;
     onClose: () => void;
 }) {
+    const { t } = useI18n();
+    const methodLabel = (method: string) => {
+        if (method === 'cash') {
+            return t('Cash');
+        }
+
+        if (method === 'card') {
+            return t('Card');
+        }
+
+        if (method === 'transfer_qr' || method === 'transfer') {
+            return t('Transfer');
+        }
+
+        return method.replaceAll('_', ' ');
+    };
+
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
                 <DialogHeader>
-                    <DialogTitle>Invoice</DialogTitle>
+                    <DialogTitle>{t('Invoice')}</DialogTitle>
                 </DialogHeader>
                 {receipt && (
                     <>
@@ -66,36 +84,36 @@ export default function InvoiceDialog({
                                     Lox Billiard
                                 </h2>
                                 <p className="text-xs text-muted-foreground">
-                                    GAME INVOICE
+                                    {t('GAME INVOICE')}
                                 </p>
                             </div>
                             <div className="grid grid-cols-2 gap-1 text-muted-foreground">
-                                <span>Invoice:</span>
+                                <span>{t('Invoice:')}</span>
                                 <span className="font-medium text-foreground">
                                     {receipt.receipt_number}
                                 </span>
-                                <span>Date:</span>
+                                <span>{t('Date:')}</span>
                                 <span className="text-foreground">
                                     {receipt.date}
                                 </span>
-                                <span>Time:</span>
+                                <span>{t('Time:')}</span>
                                 <span className="text-foreground">
                                     {receipt.time}
                                 </span>
                             </div>
                             <div className="grid grid-cols-2 gap-1 text-muted-foreground">
-                                <span>Customer:</span>
+                                <span>{t('Customer:')}</span>
                                 <span className="text-foreground">
                                     {receipt.customer_email || '—'}
                                 </span>
-                                <span>Table:</span>
+                                <span>{t('Table:')}</span>
                                 <span className="text-foreground">
-                                    {receipt.table_name || 'Open tab'}
+                                    {receipt.table_name || t('Open tab')}
                                 </span>
                             </div>
                             <div className="mt-2 border-t pt-2">
                                 <div className="mb-1 text-xs font-medium text-muted-foreground">
-                                    Line items
+                                    {t('Line items')}
                                 </div>
                                 {(receipt.line_items || []).map((item, i) => (
                                     <div
@@ -116,18 +134,15 @@ export default function InvoiceDialog({
                             {(receipt.payments?.length ?? 0) > 0 && (
                                 <div className="mt-2 border-t pt-2">
                                     <div className="mb-1 text-xs font-medium text-muted-foreground">
-                                        Payments
+                                        {t('Payments')}
                                     </div>
                                     {receipt.payments!.map((payment, i) => (
                                         <div
                                             key={i}
                                             className="flex justify-between py-0.5 text-sm"
                                         >
-                                            <span className="capitalize">
-                                                {payment.method.replaceAll(
-                                                    '_',
-                                                    ' ',
-                                                )}
+                                            <span>
+                                                {methodLabel(payment.method)}
                                             </span>
                                             <span>
                                                 {money(
@@ -139,7 +154,7 @@ export default function InvoiceDialog({
                                 </div>
                             )}
                             <div className="flex justify-between border-t pt-2 font-semibold">
-                                <span>Grand total</span>
+                                <span>{t('Grand total')}</span>
                                 <span>
                                     {money(Number(receipt.grand_total) || 0)}
                                 </span>
@@ -147,7 +162,7 @@ export default function InvoiceDialog({
                         </div>
                         {emailMessage && (
                             <p className="no-print text-sm text-muted-foreground">
-                                {emailMessage}
+                                {t(emailMessage)}
                             </p>
                         )}
                         <DialogFooter className="no-print flex-row gap-2 sm:gap-2">
@@ -155,13 +170,13 @@ export default function InvoiceDialog({
                                 variant="outline"
                                 onClick={() => window.print()}
                             >
-                                Print
+                                {t('Print')}
                             </Button>
                             <Button onClick={onEmail} disabled={!!emailSending}>
-                                {emailSending ? 'Sending…' : 'Email'}
+                                {emailSending ? t('Sending…') : t('Email')}
                             </Button>
                             <Button variant="secondary" onClick={onClose}>
-                                Close
+                                {t('Close')}
                             </Button>
                         </DialogFooter>
                     </>

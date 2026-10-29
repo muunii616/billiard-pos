@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Models\CheckoutSession;
 use App\Models\Receipt;
 
 final class ReceiptPresenter
@@ -12,39 +13,8 @@ final class ReceiptPresenter
         $sessions = $receipt->session ? collect([$receipt->session]) : ($receipt->checkoutSession?->gameSessions ?? collect());
         $lineItems = [];
         foreach ($sessions as $session) {
-            $seconds = (int) $session->total_played_seconds;
-            $blockCounts = is_array($session->time_blocks) ? $session->time_blocks : [];
-            $blockLines = TableTimeBilling::lineItemsForBlocks(
-                TableTimeBilling::normalizeCounts($blockCounts)
-            );
-
-            if ($blockLines !== []) {
-                foreach ($blockLines as $blockLine) {
-                    $tableLabel = trim((string) ($session->table?->name ?? 'Table'));
-                    if ($tableLabel === '') {
-                        $tableLabel = 'Table';
-                    } elseif (! preg_match('/^table\b/i', $tableLabel)) {
-                        $tableLabel = 'Table '.$tableLabel;
-                    }
-                    $lineItems[] = [
-                        ...$blockLine,
-                        'description' => $tableLabel.' · '.$blockLine['description'],
-                        'from' => $session->started_at?->copy()->setTimezone(PosDate::timezone())->format('d-m-Y h:i:s A'),
-                        'to' => $session->ended_at?->copy()->setTimezone(PosDate::timezone())->format('d-m-Y h:i:s A'),
-                        'duration' => sprintf('%02d:%02d:%02d', intdiv($seconds, 3600), intdiv($seconds % 3600, 60), $seconds % 60),
-                    ];
-                }
-            } elseif ($seconds > 0 || $session->time_total > 0) {
-                $lineItems[] = [
-                    'type' => 'time',
-                    'description' => self::tableTimeLabel($session->table?->name),
-                    'from' => $session->started_at?->copy()->setTimezone(PosDate::timezone())->format('d-m-Y h:i:s A'),
-                    'to' => $session->ended_at?->copy()->setTimezone(PosDate::timezone())->format('d-m-Y h:i:s A'),
-                    'duration' => sprintf('%02d:%02d:%02d', intdiv($seconds, 3600), intdiv($seconds % 3600, 60), $seconds % 60),
-                    'quantity' => 1,
-                    'unit_price' => (float) $session->time_total,
-                    'subtotal' => (float) $session->time_total,
-                ];
+            foreach (self::sessionTimeLines($session) as $line) {
+                $lineItems[] = $line;
             }
         }
         $products = $sessions->flatMap->items->concat($receipt->checkoutSession?->items ?? []);
@@ -87,16 +57,131 @@ final class ReceiptPresenter
         ];
     }
 
-    private static function tableTimeLabel(?string $tableName): string
+    /**
+     * Time lines for a specific set of blocks, used when only part of a session is being paid.
+     *
+     * @param  array<string|int, mixed>  $counts
+     * @return array<int, array<string, mixed>>
+     */
+    public static function timeLinesFor(object $session, array $counts): array
+    {
+        return self::sessionTimeLines($session, $counts);
+    }
+
+    /**
+     * Table time and products currently on a tab, for invoices that only stored the payment line.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function checkoutComponents(CheckoutSession $checkout): array
+    {
+        $checkout->loadMissing(['items', 'gameSessions.table', 'gameSessions.items']);
+        $lines = [];
+
+        foreach ($checkout->gameSessions as $session) {
+            foreach (self::sessionTimeLines($session) as $line) {
+                $lines[] = self::componentRow($line);
+            }
+
+            $tableLabel = self::tableLabel($session->table?->name);
+            foreach ($session->items as $item) {
+                $lines[] = self::componentRow([
+                    'type' => 'product',
+                    'description' => $tableLabel.' · '.($item->product_name ?? 'Item'),
+                    'quantity' => (int) $item->quantity,
+                    'unit_price' => (float) $item->unit_price,
+                    'subtotal' => (float) $item->total_price,
+                ]);
+            }
+        }
+
+        foreach ($checkout->items as $item) {
+            $lines[] = self::componentRow([
+                'type' => 'product',
+                'description' => $item->product_name ?? 'Item',
+                'quantity' => (int) $item->quantity,
+                'unit_price' => (float) $item->unit_price,
+                'subtotal' => (float) $item->total_price,
+            ]);
+        }
+
+        return $lines;
+    }
+
+    /**
+     * @param  array<string|int, mixed>|null  $counts
+     * @return array<int, array<string, mixed>>
+     */
+    private static function sessionTimeLines(object $session, ?array $counts = null): array
+    {
+        $seconds = (int) $session->total_played_seconds;
+        $blockCounts = $counts ?? (is_array($session->time_blocks) ? $session->time_blocks : []);
+        $blockLines = TableTimeBilling::lineItemsForBlocks(
+            TableTimeBilling::normalizeCounts($blockCounts)
+        );
+        $timing = [
+            'from' => $session->started_at?->copy()->setTimezone(PosDate::timezone())->format('d-m-Y h:i:s A'),
+            'to' => $session->ended_at?->copy()->setTimezone(PosDate::timezone())->format('d-m-Y h:i:s A'),
+            'duration' => sprintf('%02d:%02d:%02d', intdiv($seconds, 3600), intdiv($seconds % 3600, 60), $seconds % 60),
+        ];
+        $tableLabel = self::tableLabel($session->table?->name);
+
+        if ($blockLines !== []) {
+            return array_map(fn (array $blockLine) => [
+                ...$blockLine,
+                'description' => $tableLabel.' · '.$blockLine['description'],
+                ...$timing,
+            ], $blockLines);
+        }
+
+        if ($seconds > 0 || $session->time_total > 0) {
+            return [[
+                'type' => 'time',
+                'description' => $tableLabel.' · time',
+                'quantity' => 1,
+                'unit_price' => (float) $session->time_total,
+                'subtotal' => (float) $session->time_total,
+                ...$timing,
+            ]];
+        }
+
+        return [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $line
+     * @return array<string, mixed>
+     */
+    private static function componentRow(array $line): array
+    {
+        $meta = array_filter([
+            'from' => $line['from'] ?? null,
+            'to' => $line['to'] ?? null,
+            'duration' => $line['duration'] ?? null,
+        ], fn ($value) => $value !== null && $value !== '');
+
+        return [
+            'type' => $line['type'],
+            'description' => $line['description'],
+            'quantity' => (float) ($line['quantity'] ?? 1),
+            'unit_price' => (float) ($line['unit_price'] ?? 0),
+            'subtotal' => (float) ($line['subtotal'] ?? 0),
+            'meta' => $meta === [] ? null : $meta,
+        ];
+    }
+
+    private static function tableLabel(?string $tableName): string
     {
         $label = trim((string) $tableName);
 
         if ($label === '') {
-            $label = 'Table';
-        } elseif (! preg_match('/^table\b/i', $label)) {
-            $label = 'Table '.$label;
+            return 'Table';
         }
 
-        return $label.' · time';
+        if (! preg_match('/^table\b/i', $label)) {
+            return 'Table '.$label;
+        }
+
+        return $label;
     }
 }

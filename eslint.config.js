@@ -63,6 +63,8 @@ export default [
         },
         rules: {
             '@typescript-eslint/no-explicit-any': 'off',
+            // These pages intentionally synchronize server props and modal state.
+            'react-hooks/set-state-in-effect': 'off',
             '@typescript-eslint/consistent-type-imports': [
                 'error',
                 {
@@ -126,7 +128,11 @@ export default [
         },
         rules: {
             curly: ['error', 'all'],
-            '@stylistic/brace-style': ['error', '1tbs', { allowSingleLine: false }],
+            '@stylistic/brace-style': [
+                'error',
+                '1tbs',
+                { allowSingleLine: false },
+            ],
         },
     },
 ];

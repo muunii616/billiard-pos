@@ -4,13 +4,16 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\CheckoutSession;
+use App\Models\GameSession;
 use App\Models\Receipt;
 use App\Support\CheckoutBalance;
 use App\Support\InventoryService;
 use App\Support\PosItemEditor;
 use App\Support\PosTransaction;
+use App\Support\TableTimeBilling;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class CheckoutAdminController extends Controller
 {
@@ -21,8 +24,45 @@ class CheckoutAdminController extends Controller
                 return response()->json(['message' => 'Only open tabs can be edited.'], 422);
             }
 
-            $data = $request->validate(PosItemEditor::rules());
-            PosItemEditor::update($checkout, $data['items']);
+            $data = $request->validate(array_merge(PosItemEditor::rules(), [
+                'time_sessions' => ['sometimes', 'array'],
+                'time_sessions.*.id' => ['required', 'integer', 'distinct'],
+                'time_sessions.*.time_blocks' => ['required', 'array'],
+            ]));
+
+            $items = $data['items'] ?? [];
+            $timeSessions = $data['time_sessions'] ?? [];
+
+            if ($items === [] && $timeSessions === []) {
+                throw ValidationException::withMessages([
+                    'items' => 'Nothing to update.',
+                ]);
+            }
+
+            if ($items !== []) {
+                PosItemEditor::update($checkout, $items);
+            }
+
+            foreach ($timeSessions as $row) {
+                $session = GameSession::query()
+                    ->where('checkout_session_id', $checkout->id)
+                    ->whereKey($row['id'])
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $session) {
+                    throw ValidationException::withMessages([
+                        'time_sessions' => 'One or more table sessions are not on this tab.',
+                    ]);
+                }
+
+                $blocks = TableTimeBilling::parseOrFail($row['time_blocks'] ?? []);
+                $session->update([
+                    'time_blocks' => $blocks['counts'],
+                    'time_total' => $blocks['time_total'],
+                    'total_minutes' => $blocks['total_minutes'],
+                ]);
+            }
 
             return response()->json(['message' => 'Tab items updated.']);
         });

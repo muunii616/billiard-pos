@@ -38,7 +38,7 @@ class DashboardController extends Controller
         $now = now();
         $appTz = config('app.display_timezone');
 
-        $tables = BilliardTable::with(['latestGameSession.items'])->orderBy('id')->get()->map(function (BilliardTable $table) use ($now, $appTz) {
+        $tables = BilliardTable::with(['latestGameSession.items'])->orderBy('sort_order')->orderBy('id')->get()->map(function (BilliardTable $table) use ($now, $appTz) {
             $session = $table->latestGameSession;
             $inPlay = $session?->isActive() ?? false;
 

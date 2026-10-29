@@ -26,11 +26,14 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('cash-register', RegisterController::class)->name('cash-register.index');
     Route::get('admin/products', [AdminProductController::class, 'index'])->name('admin.products.index');
     Route::get('stock', [StockController::class, 'index'])->name('stock.index');
+    Route::get('stock/download', [StockController::class, 'download'])->name('stock.download');
     Route::post('admin/products/stock', [AdminProductController::class, 'adjustStock'])->name('admin.products.stock');
     Route::post('admin/products/external-use', [AdminProductController::class, 'recordExternalUse'])->name('admin.products.external-use');
 
     Route::get('tables', [TableController::class, 'index'])->name('tables.index');
     Route::post('tables/{table}/start', [TableController::class, 'start'])->name('tables.start');
+    Route::post('tables/{table}/prepaid', [TableController::class, 'extendPrepaid'])->name('tables.prepaid.extend');
+    Route::post('tables/{table}/prepaid/release', [TableController::class, 'releasePrepaid'])->name('tables.prepaid.release');
     Route::post('tables/{table}/pause', [TableController::class, 'pause'])->name('tables.pause');
     Route::post('tables/{table}/resume', [TableController::class, 'resume'])->name('tables.resume');
     Route::post('tables/{table}/alert', [TableController::class, 'setAlert'])->name('tables.alert.set');
@@ -55,6 +58,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('admin/cash/current', [CashSessionAdminController::class, 'current'])->name('admin.cash.current');
     Route::post('admin/cash/open', [CashSessionAdminController::class, 'open'])->name('admin.cash.open');
     Route::post('admin/cash/close', [CashSessionAdminController::class, 'close'])->name('admin.cash.close');
+    Route::post('admin/cash/continue', [CashSessionAdminController::class, 'continueShift'])->name('admin.cash.continue');
+    Route::post('admin/cash/handover', [CashSessionAdminController::class, 'handover'])->name('admin.cash.handover');
     Route::get('admin/cash/{cashSession}/receipt', [CashSessionAdminController::class, 'receipt'])->name('admin.cash.receipt');
 
     // Admin-only routes will use the "role:admin" middleware.
@@ -64,6 +69,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::delete('admin/products/{product}', [AdminProductController::class, 'destroy'])->name('admin.products.destroy');
 
         Route::post('admin/tables', [BilliardTableController::class, 'store'])->name('admin.tables.store');
+        Route::put('admin/tables/reorder', [BilliardTableController::class, 'reorder'])->name('admin.tables.reorder');
         Route::put('admin/tables/{table}', [BilliardTableController::class, 'update'])->name('admin.tables.update');
         Route::delete('admin/tables/{table}', [BilliardTableController::class, 'destroy'])->name('admin.tables.destroy');
 

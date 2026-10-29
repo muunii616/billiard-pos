@@ -13,6 +13,11 @@ export function normalizeCategory(raw: string | null | undefined): string {
         case 'combo':
         case 'combos':
             return 'Sets';
+        case 'special':
+        case 'specials':
+        case 'deal':
+        case 'deals':
+            return 'Special';
         default:
             return (
                 value
@@ -40,6 +45,8 @@ export function categoryBadgeClass(category: string): string {
             return 'bg-orange-600 text-white';
         case 'sets':
             return 'bg-teal-600 text-white';
+        case 'special':
+            return 'bg-rose-700 text-white';
         default:
             return 'bg-emerald-700 text-white';
     }

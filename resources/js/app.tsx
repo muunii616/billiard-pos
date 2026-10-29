@@ -3,8 +3,10 @@ import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import '../css/app.css';
 import { initializeTheme } from '@/hooks/use-appearance';
+import { I18nProvider } from '@/lib/i18n';
+import type { Locale } from '@/lib/i18n';
+import '../css/app.css';
 
 const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
 
@@ -18,11 +20,16 @@ createInertiaApp({
     setup({ el, App, props }) {
         const root = createRoot(el);
 
+        const locale: Locale =
+            props.initialPage.props.locale === 'en' ? 'en' : 'mn';
+
         root.render(
             <StrictMode>
-                <TooltipProvider delayDuration={0}>
-                    <App {...props} />
-                </TooltipProvider>
+                <I18nProvider initialLocale={locale}>
+                    <TooltipProvider delayDuration={0}>
+                        <App {...props} />
+                    </TooltipProvider>
+                </I18nProvider>
             </StrictMode>,
         );
     },

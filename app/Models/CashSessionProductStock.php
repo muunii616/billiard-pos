@@ -6,9 +6,9 @@ use Illuminate\Database\Eloquent\Model;
 
 class CashSessionProductStock extends Model
 {
-    protected $fillable = ['cash_session_id', 'product_id', 'opening_stock'];
+    protected $fillable = ['cash_session_id', 'product_id', 'opening_stock', 'closing_stock'];
 
-    protected $casts = ['opening_stock' => 'integer'];
+    protected $casts = ['opening_stock' => 'integer', 'closing_stock' => 'integer'];
 
     public function product()
     {

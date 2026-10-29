@@ -15,9 +15,13 @@ class BilliardTableController extends Controller
             'name' => ['required', 'string', 'max:255'],
         ]);
 
+        $nextOrder = ((int) BilliardTable::query()->max('sort_order')) + 1;
+
         BilliardTable::create([
             'name' => $data['name'],
             'status' => 'available',
+            'rotation' => 0,
+            'sort_order' => $nextOrder,
         ]);
 
         return redirect()->back();
@@ -29,6 +33,7 @@ class BilliardTableController extends Controller
             $data = $request->validate([
                 'name' => ['sometimes', 'required', 'string', 'max:255'],
                 'status' => ['sometimes', 'required', 'string', 'in:available,running,paused,maintenance'],
+                'rotation' => ['sometimes', 'integer', 'in:0,90'],
             ]);
 
             if (isset($data['status']) && $data['status'] !== $table->status) {
@@ -40,6 +45,20 @@ class BilliardTableController extends Controller
 
             return redirect()->back();
         });
+    }
+
+    public function reorder(Request $request)
+    {
+        $data = $request->validate([
+            'ids' => ['required', 'array', 'min:1'],
+            'ids.*' => ['integer', 'distinct', 'exists:billiard_tables,id'],
+        ]);
+
+        foreach ($data['ids'] as $index => $id) {
+            BilliardTable::query()->whereKey($id)->update(['sort_order' => $index + 1]);
+        }
+
+        return redirect()->back();
     }
 
     public function destroy(BilliardTable $table)

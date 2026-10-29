@@ -6,6 +6,7 @@ import InvoiceDialog from '@/components/invoice-dialog';
 import type { InvoiceReceipt } from '@/components/invoice-dialog';
 import { PageHeader } from '@/components/page-header';
 import PaymentForm from '@/components/payment-form';
+import { TimeBlockPicker } from '@/components/time-block-picker';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
     AlertDialog,
@@ -31,9 +32,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import AppLayout from '@/layouts/app-layout';
 import { categoryBadgeClass, normalizeCategory } from '@/lib/categories';
-import { formatDateTime } from '@/lib/dates';
-import { inertiaPost } from '@/lib/inertia-action';
+import {
+    formatBusinessDate,
+    formatDateTime,
+    groupTabsByDate,
+} from '@/lib/dates';
 import { jsonHeaders } from '@/lib/http';
+import { useCategoryLabel, useI18n } from '@/lib/i18n';
+import { inertiaPost } from '@/lib/inertia-action';
 import {
     buildTabBalancePayments,
     formatMoney,
@@ -41,10 +47,13 @@ import {
     roundMoney,
 } from '@/lib/payments';
 import { posCartRowClass, posPanelClass, posTileClass } from '@/lib/pos-ui';
+import { countsFromStored, DEFAULT_TIME_BLOCKS } from '@/lib/time-blocks';
+import type { TimeBlock, TimeBlockCounts } from '@/lib/time-blocks';
 import receiptsRoutes from '@/routes/receipts';
 
 type TabItemLine = {
     id: number;
+    created_at?: string;
     product_id: number | null;
     product_name: string | null;
     product_category?: string | null;
@@ -53,10 +62,29 @@ type TabItemLine = {
     total_price: number;
 };
 
+type TableSessionLine = {
+    id: number;
+    table_name: string;
+    started_at: string | null;
+    ended_at: string | null;
+    played_seconds: number;
+    time_total: number;
+    time_blocks?: Record<string, number>;
+    products_total: number;
+    items?: {
+        id: number;
+        product_name: string | null;
+        quantity: number;
+        unit_price: number;
+        total_price: number;
+    }[];
+};
+
 type CheckoutRow = {
     id: number;
     status: string;
     created_at: string;
+    latest_tab_at?: string | null;
     table_names: string[];
     time_total: number;
     items_total: number;
@@ -64,21 +92,7 @@ type CheckoutRow = {
     amount_paid?: number;
     remaining?: number;
     tab_items?: TabItemLine[];
-    table_sessions: {
-        table_name: string;
-        started_at: string | null;
-        ended_at: string | null;
-        played_seconds: number;
-        time_total: number;
-        products_total: number;
-        items?: {
-            id: number;
-            product_name: string | null;
-            quantity: number;
-            unit_price: number;
-            total_price: number;
-        }[];
-    }[];
+    table_sessions: TableSessionLine[];
 };
 
 type Product = {
@@ -88,32 +102,23 @@ type Product = {
     category: string;
     stock_quantity: number;
     low_stock_threshold: number;
+    is_deal?: boolean;
+    deal_active?: boolean;
+    deal_label?: string | null;
+    deal_buy_qty?: number | null;
 };
 
 type CheckoutSummary = {
     checkout_id: number;
     table_name: string;
-    table_sessions: {
-        table_name: string;
-        started_at: string | null;
-        ended_at: string | null;
-        played_seconds: number;
-        time_total: number;
-        products_total: number;
-        items?: {
-            id: number;
-            product_name: string | null;
-            quantity: number;
-            unit_price: number;
-            total_price: number;
-        }[];
-    }[];
+    table_sessions: TableSessionLine[];
     time_total: number;
     items_total: number;
     grand_total: number;
     amount_paid?: number;
     remaining?: number;
     tab_items?: TabItemLine[];
+    time_blocks_catalog?: TimeBlock[];
 };
 
 type Props = {
@@ -121,13 +126,31 @@ type Props = {
     products: Product[];
     receipt?: InvoiceReceipt | null;
     isAdmin?: boolean;
+    timeBlocks?: TimeBlock[];
 };
+
+function formatPlayedClock(seconds: number): string {
+    const s = Math.max(0, Math.floor(seconds));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    const pad = (n: number) => n.toString().padStart(2, '0');
+
+    return h > 0 ? `${pad(h)}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
+}
 
 export default function CheckoutsIndex({
     checkouts,
     products,
     receipt: receiptProp,
+    timeBlocks: timeBlocksProp,
 }: Props) {
+    const { t, locale } = useI18n();
+    const categoryLabel = useCategoryLabel();
+    const catalogBlocks =
+        timeBlocksProp && timeBlocksProp.length > 0
+            ? timeBlocksProp
+            : DEFAULT_TIME_BLOCKS;
     const [payModalOpen, setPayModalOpen] = useState(false);
     const [payCheckoutId, setPayCheckoutId] = useState<number | null>(null);
     const [summary, setSummary] = useState<CheckoutSummary | null>(null);
@@ -175,6 +198,14 @@ export default function CheckoutsIndex({
     const [editTabItemsError, setEditTabItemsError] = useState<string | null>(
         null,
     );
+    const [editTabTimeDraft, setEditTabTimeDraft] = useState<
+        {
+            id: number;
+            table_name: string;
+            played_seconds: number;
+            counts: TimeBlockCounts;
+        }[]
+    >([]);
     const [viewTabDetailsOpen, setViewTabDetailsOpen] = useState(false);
     const [viewTabDetailsRow, setViewTabDetailsRow] =
         useState<CheckoutRow | null>(null);
@@ -322,6 +353,7 @@ export default function CheckoutsIndex({
         setEditTabItemsRemovedIds([]);
         setEditTabItemsLoading(true);
         setEditTabItemsDraft([]);
+        setEditTabTimeDraft([]);
         fetch(`/checkouts/${checkoutId}/summary`)
             .then((res) => {
                 if (!res.ok) {
@@ -331,7 +363,20 @@ export default function CheckoutsIndex({
                 return res.json();
             })
             .then((data: CheckoutSummary) => {
+                const blocks =
+                    data.time_blocks_catalog &&
+                    data.time_blocks_catalog.length > 0
+                        ? data.time_blocks_catalog
+                        : catalogBlocks;
                 setEditTabItemsDraft(data.tab_items ?? []);
+                setEditTabTimeDraft(
+                    (data.table_sessions ?? []).map((session) => ({
+                        id: session.id,
+                        table_name: session.table_name,
+                        played_seconds: session.played_seconds,
+                        counts: countsFromStored(session.time_blocks, blocks),
+                    })),
+                );
             })
             .catch(() => setEditTabItemsError('Failed to load tab items.'))
             .finally(() => setEditTabItemsLoading(false));
@@ -342,6 +387,7 @@ export default function CheckoutsIndex({
         setEditTabItemsCheckoutId(null);
         setEditTabItemsDraft([]);
         setEditTabItemsRemovedIds([]);
+        setEditTabTimeDraft([]);
         setEditTabItemsError(null);
     };
 
@@ -359,6 +405,10 @@ export default function CheckoutsIndex({
             })),
             ...editTabItemsRemovedIds.map((id) => ({ id, quantity: 0 })),
         ];
+        const time_sessions = editTabTimeDraft.map((session) => ({
+            id: session.id,
+            time_blocks: session.counts,
+        }));
 
         try {
             const res = await fetch(
@@ -367,7 +417,7 @@ export default function CheckoutsIndex({
                     method: 'PUT',
                     headers: jsonHeaders(),
                     credentials: 'same-origin',
-                    body: JSON.stringify({ items }),
+                    body: JSON.stringify({ items, time_sessions }),
                 },
             );
             const data = await res.json().catch(() => ({}));
@@ -376,7 +426,11 @@ export default function CheckoutsIndex({
                 setEditTabItemsError(
                     typeof data.message === 'string'
                         ? data.message
-                        : 'Could not save items.',
+                        : typeof data.errors?.items?.[0] === 'string'
+                          ? data.errors.items[0]
+                          : typeof data.errors?.time_sessions?.[0] === 'string'
+                            ? data.errors.time_sessions[0]
+                            : 'Could not save items.',
                 );
 
                 return;
@@ -456,7 +510,7 @@ export default function CheckoutsIndex({
                 setActionError('Payment failed. Please try again.');
             }
 
-            router.reload({ preserveScroll: true });
+            router.reload();
         }
     };
 
@@ -522,7 +576,17 @@ export default function CheckoutsIndex({
             '/checkouts/merge',
             { target_id: targetId, source_ids: sourceIds },
             {
-                onSuccess: () => setSelectedIds([]),
+                onSuccess: () => {
+                    setSelectedIds([]);
+                    setActionError(null);
+                },
+                onError: (errors) => {
+                    const message =
+                        typeof errors.merge === 'string'
+                            ? errors.merge
+                            : 'Could not merge tabs.';
+                    setActionError(message);
+                },
                 onFinish: () => setMergeConfirmOpen(false),
             },
         );
@@ -557,12 +621,17 @@ export default function CheckoutsIndex({
         return matchesSearch && matchesCategory;
     });
 
-    const addProductToCart = (product: {
-        id: number;
-        name: string;
-        price: string;
-        category: string;
-    }) => {
+    const addProductToCart = (product: Product) => {
+        if (product.is_deal && product.deal_active === false) {
+            setActionError('This Special deal is not active today.');
+
+            return;
+        }
+
+        const unitPrice = product.is_deal
+            ? Number(product.price) * Number(product.deal_buy_qty ?? 1)
+            : Number(product.price);
+
         setAddItemCart((prev) => {
             const existing = prev.find((i) => i.productId === product.id);
 
@@ -579,7 +648,7 @@ export default function CheckoutsIndex({
                 {
                     productId: product.id,
                     name: product.name,
-                    price: Number(product.price),
+                    price: unitPrice,
                     quantity: 1,
                     category: product.category,
                 },
@@ -628,9 +697,12 @@ export default function CheckoutsIndex({
         setAddItemCheckoutId(null);
         setAddItemCart([]);
 
-        const result = await inertiaPost(`/checkouts/${checkoutId}/items/bulk`, {
-            items,
-        });
+        const result = await inertiaPost(
+            `/checkouts/${checkoutId}/items/bulk`,
+            {
+                items,
+            },
+        );
         setAddItemSubmitting(false);
 
         if (result !== 'success') {
@@ -638,7 +710,7 @@ export default function CheckoutsIndex({
                 setActionError('Failed to add items. Refreshing…');
             }
 
-            router.reload({ preserveScroll: true });
+            router.reload();
         }
     };
 
@@ -648,7 +720,9 @@ export default function CheckoutsIndex({
         }
 
         if (!adminEnabled && deleteTabReason.trim() === '') {
-            setDeleteTabError('Employees must provide a reason to delete a tab.');
+            setDeleteTabError(
+                'Employees must provide a reason to delete a tab.',
+            );
 
             return;
         }
@@ -723,17 +797,19 @@ export default function CheckoutsIndex({
 
     return (
         <AppLayout breadcrumbs={[]}>
-            <Head title="Open tab" />
+            <Head title={t('Open tab')} />
             <div className="flex flex-1 flex-col gap-4 rounded-xl p-4">
                 {actionError && (
                     <div className="pointer-events-none fixed top-6 left-1/2 z-50 w-full max-w-md -translate-x-1/2 px-2 sm:px-0">
                         <Alert variant="destructive">
-                            <AlertTitle>Action failed</AlertTitle>
-                            <AlertDescription>{actionError}</AlertDescription>
+                            <AlertTitle>{t('Action failed')}</AlertTitle>
+                            <AlertDescription>
+                                {t(actionError)}
+                            </AlertDescription>
                         </Alert>
                     </div>
                 )}
-                <PageHeader title="Open tab">
+                <PageHeader title={t('Open tab')}>
                     <div className="flex items-center gap-2">
                         {adminEnabled && (
                             <Button
@@ -741,7 +817,7 @@ export default function CheckoutsIndex({
                                 size="sm"
                                 onClick={toggleShowAll}
                             >
-                                {showAll ? 'Show open only' : 'Show all'}
+                                {showAll ? t('Show open only') : t('Show all')}
                             </Button>
                         )}
                         {checkouts.length > 1 && (
@@ -751,7 +827,7 @@ export default function CheckoutsIndex({
                                 disabled={selectedIds.length < 2}
                                 onClick={handleMergeTabs}
                             >
-                                Merge tabs
+                                {t('Merge tabs')}
                             </Button>
                         )}
                     </div>
@@ -764,18 +840,24 @@ export default function CheckoutsIndex({
                     <AlertDialogContent>
                         <AlertDialogHeader>
                             <AlertDialogTitle>
-                                Merge selected tabs?
+                                {t('Merge selected tabs?')}
                             </AlertDialogTitle>
                             <AlertDialogDescription>
                                 {selectedIds.length >= 2
-                                    ? `Tab #${selectedIds[0]} will be the target. ${selectedIds.length - 1} tab(s) will be merged into it. This action cannot be undone.`
-                                    : 'Select at least two tabs to merge.'}
+                                    ? t(
+                                          'Tab #{id} will be the target. {count} tab(s) will be merged into it. Partial payments move with the merge. This action cannot be undone.',
+                                          {
+                                              id: selectedIds[0],
+                                              count: selectedIds.length - 1,
+                                          },
+                                      )
+                                    : t('Select at least two tabs to merge.')}
                             </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
                             <AlertDialogAction onClick={confirmMergeTabs}>
-                                Confirm merge
+                                {t('Confirm merge')}
                             </AlertDialogAction>
                         </AlertDialogFooter>
                     </AlertDialogContent>
@@ -797,20 +879,25 @@ export default function CheckoutsIndex({
                 >
                     <AlertDialogContent>
                         <AlertDialogHeader>
-                            <AlertDialogTitle>Delete tab?</AlertDialogTitle>
+                            <AlertDialogTitle>
+                                {t('Delete tab?')}
+                            </AlertDialogTitle>
                             <AlertDialogDescription>
                                 {deleteTabId != null
-                                    ? `Tab #${deleteTabId} will be closed without payment. This cannot be undone.`
+                                    ? t(
+                                          'Tab #{id} will be closed without payment. This cannot be undone.',
+                                          { id: deleteTabId },
+                                      )
                                     : ''}
                             </AlertDialogDescription>
                         </AlertDialogHeader>
                         <div className="space-y-3">
                             <div className="space-y-2">
                                 <Label htmlFor="delete-tab-reason">
-                                    Reason{' '}
+                                    {t('Reason')}{' '}
                                     {adminEnabled
-                                        ? '(optional for admin)'
-                                        : '(required)'}
+                                        ? t('(optional for admin)')
+                                        : t('(required)')}
                                 </Label>
                                 <textarea
                                     id="delete-tab-reason"
@@ -822,8 +909,10 @@ export default function CheckoutsIndex({
                                     }}
                                     placeholder={
                                         adminEnabled
-                                            ? 'Optional note for the record'
-                                            : 'Explain why this tab is being deleted'
+                                            ? t('Optional note for the record')
+                                            : t(
+                                                  'Explain why this tab is being deleted',
+                                              )
                                     }
                                 />
                             </div>
@@ -837,23 +926,24 @@ export default function CheckoutsIndex({
                                 />
                                 <span>
                                     <span className="font-medium">
-                                        Return products to stock
+                                        {t('Return products to stock')}
                                     </span>
                                     <span className="mt-0.5 block text-muted-foreground">
-                                        Turn off if items were already given out
-                                        or used.
+                                        {t(
+                                            'Turn off if items were already given out or used.',
+                                        )}
                                     </span>
                                 </span>
                             </label>
                         </div>
                         {deleteTabError && (
                             <p className="text-sm text-destructive">
-                                {deleteTabError}
+                                {t(deleteTabError)}
                             </p>
                         )}
                         <AlertDialogFooter>
                             <AlertDialogCancel disabled={deleteTabSubmitting}>
-                                Cancel
+                                {t('Cancel')}
                             </AlertDialogCancel>
                             <AlertDialogAction
                                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -864,8 +954,8 @@ export default function CheckoutsIndex({
                                 }}
                             >
                                 {deleteTabSubmitting
-                                    ? 'Deleting…'
-                                    : 'Delete tab'}
+                                    ? t('Deleting…')
+                                    : t('Delete tab')}
                             </AlertDialogAction>
                         </AlertDialogFooter>
                     </AlertDialogContent>
@@ -883,17 +973,22 @@ export default function CheckoutsIndex({
                 >
                     <AlertDialogContent>
                         <AlertDialogHeader>
-                            <AlertDialogTitle>Reopen tab?</AlertDialogTitle>
+                            <AlertDialogTitle>
+                                {t('Reopen tab?')}
+                            </AlertDialogTitle>
                             <AlertDialogDescription>
                                 {reopenTabId != null
-                                    ? `Tab #${reopenTabId} will reopen for correction. Any previous receipt will be voided; payment will be required again. Stock will be reserved for voided tabs.`
+                                    ? t(
+                                          'Tab #{id} will reopen for correction. Any previous receipt will be voided; payment will be required again. Stock will be reserved for voided tabs.',
+                                          { id: reopenTabId },
+                                      )
                                     : ''}
                             </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
                             <AlertDialogAction onClick={confirmReopenTab}>
-                                Reopen
+                                {t('Reopen')}
                             </AlertDialogAction>
                         </AlertDialogFooter>
                     </AlertDialogContent>
@@ -902,229 +997,360 @@ export default function CheckoutsIndex({
                 {checkouts.length === 0 ? (
                     <EmptyState
                         icon={Wallet}
-                        title="No open tabs"
-                        description="End a table session and move it here, or send products from the Products page."
+                        title={t('No open tabs')}
+                        description={t(
+                            'End a table session and move it here, or send products from the Products page.',
+                        )}
                         action={
                             <Button asChild>
-                                <Link href="/tables">Go to Tables</Link>
+                                <Link href="/tables">{t('Go to Tables')}</Link>
                             </Button>
                         }
                     />
                 ) : (
-                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                        {checkouts.map((row) => (
-                            <div
-                                key={row.id}
-                                className="flex flex-col justify-between rounded-xl border border-sidebar-border/70 bg-background p-4 shadow-sm dark:border-sidebar-border"
+                    <div className="space-y-6">
+                        {groupTabsByDate(checkouts).map((group) => (
+                            <section
+                                key={group.date}
+                                aria-labelledby={`tabs-date-${group.date}`}
                             >
-                                <div>
-                                    <div className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
-                                        <div className="flex items-center gap-2">
-                                            <Wallet className="h-4 w-4" />
-                                            Tab #{row.id}
-                                        </div>
-                                        <input
-                                            type="checkbox"
-                                            className="h-4 w-4 rounded border-sidebar-border/70 bg-background"
-                                            checked={selectedIds.includes(
-                                                row.id,
-                                            )}
-                                            onChange={() =>
-                                                toggleSelected(row.id)
-                                            }
-                                        />
-                                    </div>
-                                    <p className="mt-1 text-sm text-muted-foreground">
-                                        {row.table_names.length
-                                            ? row.table_names.join(', ')
-                                            : '—'}
-                                    </p>
-                                    {row.table_sessions.map((tableSession) => (
+                                <div className="mb-3 flex items-center gap-3">
+                                    <h2
+                                        id={`tabs-date-${group.date}`}
+                                        className="text-sm font-semibold"
+                                    >
+                                        {formatBusinessDate(group.date, locale)}
+                                    </h2>
+                                    <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                                        {t('{count} tabs', {
+                                            count: group.tabs.length,
+                                        })}
+                                    </span>
+                                    <div className="h-px flex-1 bg-border" />
+                                </div>
+                                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                                    {group.tabs.map((row) => (
                                         <div
-                                            key={`${row.id}-${tableSession.table_name}`}
-                                            className="mt-2 rounded-md bg-muted/40 p-2 text-xs"
+                                            key={row.id}
+                                            className="flex flex-col justify-between rounded-xl border border-sidebar-border/70 bg-background p-4 shadow-sm dark:border-sidebar-border"
                                         >
-                                            <div className="font-medium">
-                                                {tableSession.table_name}
+                                            <div>
+                                                <div className="flex items-center justify-between gap-2 text-sm font-medium text-muted-foreground">
+                                                    <div className="flex items-center gap-2">
+                                                        <Wallet className="h-4 w-4" />
+                                                        {t('Tab #{id}', {
+                                                            id: row.id,
+                                                        })}
+                                                    </div>
+                                                    <input
+                                                        type="checkbox"
+                                                        className="h-4 w-4 rounded border-sidebar-border/70 bg-background"
+                                                        checked={selectedIds.includes(
+                                                            row.id,
+                                                        )}
+                                                        onChange={() =>
+                                                            toggleSelected(
+                                                                row.id,
+                                                            )
+                                                        }
+                                                    />
+                                                </div>
+                                                <p className="mt-1 text-sm text-muted-foreground">
+                                                    {row.table_names.length
+                                                        ? row.table_names.join(
+                                                              ', ',
+                                                          )
+                                                        : '—'}
+                                                </p>
+                                                {row.table_sessions.map(
+                                                    (tableSession) => (
+                                                        <div
+                                                            key={`${row.id}-${tableSession.id}`}
+                                                            className="mt-2 rounded-md bg-muted/40 p-2 text-xs"
+                                                        >
+                                                            <div className="font-medium">
+                                                                {
+                                                                    tableSession.table_name
+                                                                }
+                                                            </div>
+                                                            <div className="text-muted-foreground">
+                                                                {t(
+                                                                    'Started {time}',
+                                                                    {
+                                                                        time: tableSession.started_at
+                                                                            ? formatDateTime(
+                                                                                  tableSession.started_at,
+                                                                              )
+                                                                            : '—',
+                                                                    },
+                                                                )}
+                                                            </div>
+                                                            <div className="text-muted-foreground">
+                                                                {t(
+                                                                    'Ended {time}',
+                                                                    {
+                                                                        time: tableSession.ended_at
+                                                                            ? formatDateTime(
+                                                                                  tableSession.ended_at,
+                                                                              )
+                                                                            : '—',
+                                                                    },
+                                                                )}
+                                                            </div>
+                                                            <div className="mt-1">
+                                                                {t(
+                                                                    'Table: {time} · Products: {products}',
+                                                                    {
+                                                                        time: money(
+                                                                            tableSession.time_total,
+                                                                        ),
+                                                                        products:
+                                                                            money(
+                                                                                tableSession.products_total,
+                                                                            ),
+                                                                    },
+                                                                )}
+                                                            </div>
+                                                            {(tableSession.items
+                                                                ?.length ?? 0) >
+                                                                0 && (
+                                                                <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                                                                    {tableSession.items?.map(
+                                                                        (
+                                                                            item,
+                                                                        ) => (
+                                                                            <li
+                                                                                key={
+                                                                                    item.id
+                                                                                }
+                                                                            >
+                                                                                {
+                                                                                    item.quantity
+                                                                                }
+
+                                                                                ×{' '}
+                                                                                {item.product_name ??
+                                                                                    t(
+                                                                                        'Item',
+                                                                                    )}{' '}
+                                                                                (
+                                                                                {money(
+                                                                                    item.total_price,
+                                                                                )}
+
+                                                                                )
+                                                                            </li>
+                                                                        ),
+                                                                    )}
+                                                                </ul>
+                                                            )}
+                                                        </div>
+                                                    ),
+                                                )}
+                                                {(row.tab_items?.length ?? 0) >
+                                                    0 && (
+                                                    <div className="mt-2 rounded-md bg-muted/40 p-2 text-xs">
+                                                        <div className="font-medium">
+                                                            {t('Tab products')}
+                                                        </div>
+                                                        <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                                                            {row.tab_items?.map(
+                                                                (item) => (
+                                                                    <li
+                                                                        key={
+                                                                            item.id
+                                                                        }
+                                                                    >
+                                                                        {
+                                                                            item.quantity
+                                                                        }
+                                                                        ×{' '}
+                                                                        {item.product_name ??
+                                                                            t(
+                                                                                'Item',
+                                                                            )}{' '}
+                                                                        (
+                                                                        {money(
+                                                                            item.total_price,
+                                                                        )}
+                                                                        )
+                                                                        {item.created_at && (
+                                                                            <span className="ml-2 text-muted-foreground">
+                                                                                {formatDateTime(
+                                                                                    item.created_at,
+                                                                                )}
+                                                                            </span>
+                                                                        )}
+                                                                    </li>
+                                                                ),
+                                                            )}
+                                                        </ul>
+                                                    </div>
+                                                )}
+                                                <div className="mt-3 grid grid-cols-2 gap-1 text-sm">
+                                                    <span className="text-muted-foreground">
+                                                        {t('Time charge:')}
+                                                    </span>
+                                                    <span>
+                                                        {money(
+                                                            Number(
+                                                                row.time_total,
+                                                            ),
+                                                        )}
+                                                    </span>
+                                                    <span className="text-muted-foreground">
+                                                        {t('Items charge:')}
+                                                    </span>
+                                                    <span>
+                                                        {money(
+                                                            Number(
+                                                                row.items_total,
+                                                            ),
+                                                        )}
+                                                    </span>
+                                                    <span className="font-medium text-muted-foreground">
+                                                        {t('Total:')}
+                                                    </span>
+                                                    <span className="font-semibold">
+                                                        {money(
+                                                            Number(
+                                                                row.grand_total,
+                                                            ),
+                                                        )}
+                                                    </span>
+                                                    {Number(
+                                                        row.amount_paid ?? 0,
+                                                    ) > 0.01 && (
+                                                        <>
+                                                            <span className="text-muted-foreground">
+                                                                {t(
+                                                                    'Paid so far:',
+                                                                )}
+                                                            </span>
+                                                            <span className="text-emerald-700 dark:text-emerald-400">
+                                                                {money(
+                                                                    Number(
+                                                                        row.amount_paid ??
+                                                                            0,
+                                                                    ),
+                                                                )}
+                                                            </span>
+                                                            <span className="font-medium text-muted-foreground">
+                                                                {t(
+                                                                    'Remaining:',
+                                                                )}
+                                                            </span>
+                                                            <span className="font-semibold">
+                                                                {money(
+                                                                    Number(
+                                                                        row.remaining ??
+                                                                            row.grand_total,
+                                                                    ),
+                                                                )}
+                                                            </span>
+                                                        </>
+                                                    )}
+                                                </div>
                                             </div>
-                                            <div className="text-muted-foreground">
-                                                Started{' '}
-                                                {tableSession.started_at
-                                                    ? formatDateTime(
-                                                          tableSession.started_at,
-                                                      )
-                                                    : '—'}
-                                            </div>
-                                            <div className="text-muted-foreground">
-                                                Ended{' '}
-                                                {tableSession.ended_at
-                                                    ? formatDateTime(
-                                                          tableSession.ended_at,
-                                                      )
-                                                    : '—'}
-                                            </div>
-                                            <div className="mt-1">
-                                                Table:{' '}
-                                                {money(tableSession.time_total)}{' '}
-                                                · Products:{' '}
-                                                {money(
-                                                    tableSession.products_total,
+                                            <div className="mt-4 flex flex-wrap gap-2">
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    onClick={() => {
+                                                        setViewTabDetailsRow(
+                                                            row,
+                                                        );
+                                                        setViewTabDetailsOpen(
+                                                            true,
+                                                        );
+                                                    }}
+                                                >
+                                                    {t('View details')}
+                                                </Button>
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    onClick={() =>
+                                                        openAddItemModal(row.id)
+                                                    }
+                                                >
+                                                    {t('Add item')}
+                                                </Button>
+                                                {adminEnabled &&
+                                                    row.status === 'open' && (
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            className="gap-1"
+                                                            onClick={() =>
+                                                                openEditTabItems(
+                                                                    row.id,
+                                                                )
+                                                            }
+                                                        >
+                                                            <Pencil className="h-3.5 w-3.5" />
+                                                            {t('Edit items')}
+                                                        </Button>
+                                                    )}
+                                                <Button
+                                                    size="sm"
+                                                    onClick={() =>
+                                                        openPayModal(row.id)
+                                                    }
+                                                >
+                                                    {Number(
+                                                        row.amount_paid ?? 0,
+                                                    ) > 0.01
+                                                        ? t('Pay remaining')
+                                                        : t('Pay now')}
+                                                </Button>
+                                                {adminEnabled &&
+                                                    row.status !== 'open' && (
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            onClick={() => {
+                                                                setReopenTabId(
+                                                                    row.id,
+                                                                );
+                                                                setReopenTabConfirmOpen(
+                                                                    true,
+                                                                );
+                                                            }}
+                                                        >
+                                                            {t('Reopen')}
+                                                        </Button>
+                                                    )}
+                                                {row.status === 'open' && (
+                                                    <Button
+                                                        size="sm"
+                                                        variant="destructive"
+                                                        onClick={() => {
+                                                            setDeleteTabId(
+                                                                row.id,
+                                                            );
+                                                            setDeleteTabReason(
+                                                                '',
+                                                            );
+                                                            setDeleteTabRestock(
+                                                                true,
+                                                            );
+                                                            setDeleteTabError(
+                                                                null,
+                                                            );
+                                                            setDeleteTabConfirmOpen(
+                                                                true,
+                                                            );
+                                                        }}
+                                                    >
+                                                        {t('Delete')}
+                                                    </Button>
                                                 )}
                                             </div>
-                                            {(tableSession.items?.length ??
-                                                0) > 0 && (
-                                                <ul className="mt-1 space-y-0.5 text-muted-foreground">
-                                                    {tableSession.items?.map(
-                                                        (item) => (
-                                                            <li key={item.id}>
-                                                                {item.quantity}×{' '}
-                                                                {item.product_name ??
-                                                                    'Item'}{' '}
-                                                                (
-                                                                {money(
-                                                                    item.total_price,
-                                                                )}
-                                                                )
-                                                            </li>
-                                                        ),
-                                                    )}
-                                                </ul>
-                                            )}
                                         </div>
                                     ))}
-                                    {(row.tab_items?.length ?? 0) > 0 && (
-                                        <div className="mt-2 rounded-md bg-muted/40 p-2 text-xs">
-                                            <div className="font-medium">
-                                                Tab products
-                                            </div>
-                                            <ul className="mt-1 space-y-0.5 text-muted-foreground">
-                                                {row.tab_items?.map((item) => (
-                                                    <li key={item.id}>
-                                                        {item.quantity}×{' '}
-                                                        {item.product_name ??
-                                                            'Item'}{' '}
-                                                        (
-                                                        {money(item.total_price)}
-                                                        )
-                                                    </li>
-                                                ))}
-                                            </ul>
-                                        </div>
-                                    )}
-                                    <div className="mt-3 grid grid-cols-2 gap-1 text-sm">
-                                        <span className="text-muted-foreground">
-                                            Time charge:
-                                        </span>
-                                        <span>
-                                            {money(Number(row.time_total))}
-                                        </span>
-                                        <span className="text-muted-foreground">
-                                            Items charge:
-                                        </span>
-                                        <span>
-                                            {money(Number(row.items_total))}
-                                        </span>
-                                        <span className="font-medium text-muted-foreground">
-                                            Total:
-                                        </span>
-                                        <span className="font-semibold">
-                                            {money(Number(row.grand_total))}
-                                        </span>
-                                        {Number(row.amount_paid ?? 0) > 0.01 && (
-                                            <>
-                                                <span className="text-muted-foreground">
-                                                    Paid so far:
-                                                </span>
-                                                <span className="text-emerald-700 dark:text-emerald-400">
-                                                    {money(
-                                                        Number(
-                                                            row.amount_paid ?? 0,
-                                                        ),
-                                                    )}
-                                                </span>
-                                                <span className="font-medium text-muted-foreground">
-                                                    Remaining:
-                                                </span>
-                                                <span className="font-semibold">
-                                                    {money(
-                                                        Number(
-                                                            row.remaining ??
-                                                                row.grand_total,
-                                                        ),
-                                                    )}
-                                                </span>
-                                            </>
-                                        )}
-                                    </div>
                                 </div>
-                                <div className="mt-4 flex flex-wrap gap-2">
-                                    <Button
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={() => {
-                                            setViewTabDetailsRow(row);
-                                            setViewTabDetailsOpen(true);
-                                        }}
-                                    >
-                                        View details
-                                    </Button>
-                                    <Button
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={() => openAddItemModal(row.id)}
-                                    >
-                                        Add item
-                                    </Button>
-                                    {adminEnabled && row.status === 'open' && (
-                                        <Button
-                                            size="sm"
-                                            variant="outline"
-                                            className="gap-1"
-                                            onClick={() =>
-                                                openEditTabItems(row.id)
-                                            }
-                                        >
-                                            <Pencil className="h-3.5 w-3.5" />
-                                            Edit items
-                                        </Button>
-                                    )}
-                                    <Button
-                                        size="sm"
-                                        onClick={() => openPayModal(row.id)}
-                                    >
-                                        {Number(row.amount_paid ?? 0) > 0.01
-                                            ? 'Pay remaining'
-                                            : 'Pay now'}
-                                    </Button>
-                                    {adminEnabled && row.status !== 'open' && (
-                                        <Button
-                                            size="sm"
-                                            variant="outline"
-                                            onClick={() => {
-                                                setReopenTabId(row.id);
-                                                setReopenTabConfirmOpen(true);
-                                            }}
-                                        >
-                                            Reopen
-                                        </Button>
-                                    )}
-                                    {row.status === 'open' && (
-                                        <Button
-                                            size="sm"
-                                            variant="destructive"
-                                            onClick={() => {
-                                                setDeleteTabId(row.id);
-                                                setDeleteTabReason('');
-                                                setDeleteTabRestock(true);
-                                                setDeleteTabError(null);
-                                                setDeleteTabConfirmOpen(true);
-                                            }}
-                                        >
-                                            Delete
-                                        </Button>
-                                    )}
-                                </div>
-                            </div>
+                            </section>
                         ))}
                     </div>
                 )}
@@ -1135,17 +1361,18 @@ export default function CheckoutsIndex({
                 >
                     <DialogContent className="max-h-[90vh] w-[calc(100vw-1rem)] overflow-y-auto sm:max-w-5xl">
                         <DialogHeader>
-                            <DialogTitle>Add Items</DialogTitle>
+                            <DialogTitle>{t('Add Items')}</DialogTitle>
                             <DialogDescription>
-                                Search and add multiple products to this open
-                                tab.
+                                {t(
+                                    'Search and add multiple products to this open tab.',
+                                )}
                             </DialogDescription>
                         </DialogHeader>
 
                         <div className="mt-2 rounded-xl border border-sidebar-border/70 bg-background/95 p-3 shadow-sm sm:p-4 dark:border-sidebar-border">
                             <div className="mb-4">
                                 <Input
-                                    placeholder="Search products..."
+                                    placeholder={t('Search products...')}
                                     value={addItemSearch}
                                     onChange={(e) =>
                                         setAddItemSearch(e.target.value)
@@ -1157,9 +1384,11 @@ export default function CheckoutsIndex({
                             <div className="flex flex-col gap-3 overflow-y-auto lg:h-[420px] lg:flex-row lg:gap-4 lg:overflow-hidden">
                                 <div className="flex w-full flex-shrink-0 flex-col lg:w-52">
                                     <Label className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-                                        Categories
+                                        {t('Categories')}
                                     </Label>
-                                    <div className={`max-h-40 space-y-1 overflow-y-auto ${posPanelClass} p-2 lg:max-h-none lg:flex-1`}>
+                                    <div
+                                        className={`max-h-40 space-y-1 overflow-y-auto ${posPanelClass} p-2 lg:max-h-none lg:flex-1`}
+                                    >
                                         <Button
                                             type="button"
                                             size="sm"
@@ -1173,7 +1402,7 @@ export default function CheckoutsIndex({
                                                 setAddItemCategory('all')
                                             }
                                         >
-                                            All Items
+                                            {t('All Items')}
                                         </Button>
                                         {categories.map((cat) => (
                                             <Button
@@ -1190,7 +1419,7 @@ export default function CheckoutsIndex({
                                                     setAddItemCategory(cat)
                                                 }
                                             >
-                                                {cat}
+                                                {categoryLabel(cat)}
                                             </Button>
                                         ))}
                                     </div>
@@ -1198,48 +1427,81 @@ export default function CheckoutsIndex({
 
                                 <div className="flex min-w-0 flex-1 flex-col">
                                     <Label className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-                                        Items
+                                        {t('Items')}
                                     </Label>
-                                    <div className={`min-h-0 flex-1 overflow-hidden ${posPanelClass} p-3`}>
+                                    <div
+                                        className={`min-h-0 flex-1 overflow-hidden ${posPanelClass} p-3`}
+                                    >
                                         <div className="grid max-h-[34vh] grid-cols-1 content-start gap-3 overflow-y-auto text-sm sm:grid-cols-2 lg:h-full lg:max-h-none">
                                             {filteredProducts.length === 0 && (
                                                 <div className="col-span-2 px-2 py-1 text-muted-foreground">
-                                                    No products match your
-                                                    search.
+                                                    {t(
+                                                        'No products match your search.',
+                                                    )}
                                                 </div>
                                             )}
-                                            {filteredProducts.map((p) => (
-                                                <button
-                                                    key={p.id}
-                                                    type="button"
-                                                    onClick={() =>
-                                                        addProductToCart(p)
-                                                    }
-                                                    className={`${posTileClass} h-[120px] justify-between`}
-                                                >
-                                                    <div className="mb-1 flex items-start justify-between gap-2">
-                                                        <div className="text-sm leading-snug font-semibold">
-                                                            {p.name}
-                                                        </div>
-                                                        <span
-                                                            className={`rounded-full px-2 py-0.5 text-[11px] font-semibold tracking-wide whitespace-nowrap uppercase ${categoryBadgeClass(p.category)}`}
-                                                        >
-                                                            {normalizeCategory(
-                                                                p.category,
-                                                            )}
-                                                        </span>
-                                                    </div>
-                                                    <div className="mt-1 text-lg font-bold text-emerald-700 tabular-nums dark:text-emerald-300">
-                                                        {money(Number(p.price))}
-                                                    </div>
-                                                    <div
-                                                        className={`text-xs ${p.stock_quantity <= p.low_stock_threshold ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}`}
+                                            {filteredProducts.map((p) => {
+                                                const dealOff =
+                                                    !!p.is_deal &&
+                                                    p.deal_active === false;
+                                                const displayPrice = p.is_deal
+                                                    ? Number(p.price) *
+                                                      Number(
+                                                          p.deal_buy_qty ?? 1,
+                                                      )
+                                                    : Number(p.price);
+
+                                                return (
+                                                    <button
+                                                        key={p.id}
+                                                        type="button"
+                                                        disabled={dealOff}
+                                                        onClick={() =>
+                                                            addProductToCart(p)
+                                                        }
+                                                        className={`${posTileClass} h-[120px] justify-between ${dealOff ? 'opacity-50' : ''}`}
                                                     >
-                                                        Stock:{' '}
-                                                        {p.stock_quantity}
-                                                    </div>
-                                                </button>
-                                            ))}
+                                                        <div className="mb-1 flex items-start justify-between gap-2">
+                                                            <div className="text-sm leading-snug font-semibold">
+                                                                {p.name}
+                                                            </div>
+                                                            <span
+                                                                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold tracking-wide whitespace-nowrap uppercase ${categoryBadgeClass(p.category)}`}
+                                                            >
+                                                                {p.deal_label
+                                                                    ? `Special ${p.deal_label}`
+                                                                    : normalizeCategory(
+                                                                          p.category,
+                                                                      )}
+                                                            </span>
+                                                        </div>
+                                                        <div className="mt-1 text-lg font-bold text-emerald-700 tabular-nums dark:text-emerald-300">
+                                                            {money(
+                                                                displayPrice,
+                                                            )}
+                                                        </div>
+                                                        <div
+                                                            className={`text-xs ${p.stock_quantity <= p.low_stock_threshold ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}`}
+                                                        >
+                                                            {dealOff
+                                                                ? t('Deal off')
+                                                                : p.is_deal
+                                                                  ? t(
+                                                                        'Packages: {count}',
+                                                                        {
+                                                                            count: p.stock_quantity,
+                                                                        },
+                                                                    )
+                                                                  : t(
+                                                                        'Stock: {count}',
+                                                                        {
+                                                                            count: p.stock_quantity,
+                                                                        },
+                                                                    )}
+                                                        </div>
+                                                    </button>
+                                                );
+                                            })}
                                         </div>
                                     </div>
                                 </div>
@@ -1248,7 +1510,9 @@ export default function CheckoutsIndex({
                                     <Label className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                                         Cart
                                     </Label>
-                                    <div className={`min-h-0 flex-1 overflow-hidden ${posPanelClass} p-3 text-sm`}>
+                                    <div
+                                        className={`min-h-0 flex-1 overflow-hidden ${posPanelClass} p-3 text-sm`}
+                                    >
                                         <div className="max-h-40 space-y-2 overflow-y-auto lg:h-full lg:max-h-none">
                                             {addItemCart.length === 0 && (
                                                 <div className="px-2 py-1 text-sm text-muted-foreground italic">
@@ -1290,7 +1554,7 @@ export default function CheckoutsIndex({
                                     </div>
                                     <div className="mt-3 flex items-center justify-between text-sm">
                                         <span className="text-muted-foreground">
-                                            Total:
+                                            {t('Total:')}
                                         </span>
                                         <span className="font-semibold">
                                             {money(cartTotal)}
@@ -1319,8 +1583,8 @@ export default function CheckoutsIndex({
                                             }
                                         >
                                             {addItemSubmitting
-                                                ? 'Adding…'
-                                                : 'Add items'}
+                                                ? t('Adding…')
+                                                : t('Add items')}
                                         </Button>
                                     </div>
                                 </div>
@@ -1333,6 +1597,7 @@ export default function CheckoutsIndex({
                     open={viewTabDetailsOpen}
                     onOpenChange={(open) => {
                         setViewTabDetailsOpen(open);
+
                         if (!open) {
                             setViewTabDetailsRow(null);
                         }
@@ -1341,13 +1606,17 @@ export default function CheckoutsIndex({
                     <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
                         <DialogHeader>
                             <DialogTitle>
-                                Tab details — #{viewTabDetailsRow?.id ?? ''}
+                                {t('Tab details — #{id}', {
+                                    id: viewTabDetailsRow?.id ?? '',
+                                })}
                             </DialogTitle>
                             <DialogDescription>
-                                Read-only item list for this tab.
+                                {t('Read-only item list for this tab.')}
                                 {adminEnabled
-                                    ? ' Use Edit items to change quantities.'
-                                    : ' Only admins can edit items.'}
+                                    ? t(
+                                          ' Use Edit items to change products or time blocks.',
+                                      )
+                                    : t(' Only admins can edit items.')}
                             </DialogDescription>
                         </DialogHeader>
                         {viewTabDetailsRow && (
@@ -1355,22 +1624,31 @@ export default function CheckoutsIndex({
                                 {viewTabDetailsRow.table_sessions.map(
                                     (session) => (
                                         <div
-                                            key={`${viewTabDetailsRow.id}-${session.table_name}`}
+                                            key={`${viewTabDetailsRow.id}-${session.id}`}
                                             className="rounded-md border border-border/70 p-3"
                                         >
                                             <div className="font-medium">
                                                 {session.table_name}
                                             </div>
                                             <div className="mt-1 text-xs text-muted-foreground">
-                                                Time{' '}
-                                                {money(session.time_total)} ·
-                                                Products{' '}
-                                                {money(session.products_total)}
+                                                {t(
+                                                    'Time {time} · Products {products}',
+                                                    {
+                                                        time: money(
+                                                            session.time_total,
+                                                        ),
+                                                        products: money(
+                                                            session.products_total,
+                                                        ),
+                                                    },
+                                                )}
                                             </div>
                                             {(session.items?.length ?? 0) ===
                                             0 ? (
                                                 <p className="mt-2 text-xs text-muted-foreground">
-                                                    No products from this table.
+                                                    {t(
+                                                        'No products from this table.',
+                                                    )}
                                                 </p>
                                             ) : (
                                                 <ul className="mt-2 space-y-1">
@@ -1403,12 +1681,12 @@ export default function CheckoutsIndex({
                                 )}
                                 <div className="rounded-md border border-border/70 p-3">
                                     <div className="font-medium">
-                                        Tab products
+                                        {t('Tab products')}
                                     </div>
                                     {(viewTabDetailsRow.tab_items?.length ??
                                         0) === 0 ? (
                                         <p className="mt-2 text-xs text-muted-foreground">
-                                            No direct tab products.
+                                            {t('No direct tab products.')}
                                         </p>
                                     ) : (
                                         <ul className="mt-2 space-y-1">
@@ -1421,7 +1699,14 @@ export default function CheckoutsIndex({
                                                         <span>
                                                             {item.quantity}×{' '}
                                                             {item.product_name ??
-                                                                'Item'}
+                                                                t('Item')}
+                                                            {item.created_at && (
+                                                                <span className="block text-xs text-muted-foreground">
+                                                                    {formatDateTime(
+                                                                        item.created_at,
+                                                                    )}
+                                                                </span>
+                                                            )}
                                                         </span>
                                                         <span className="tabular-nums">
                                                             {money(
@@ -1435,7 +1720,7 @@ export default function CheckoutsIndex({
                                     )}
                                 </div>
                                 <div className="flex justify-between border-t pt-2 font-medium">
-                                    <span>Total</span>
+                                    <span>{t('Total')}</span>
                                     <span>
                                         {money(
                                             Number(
@@ -1451,7 +1736,7 @@ export default function CheckoutsIndex({
                                 variant="outline"
                                 onClick={() => setViewTabDetailsOpen(false)}
                             >
-                                Close
+                                {t('Close')}
                             </Button>
                         </DialogFooter>
                     </DialogContent>
@@ -1465,91 +1750,150 @@ export default function CheckoutsIndex({
                         }
                     }}
                 >
-                    <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
+                    <DialogContent className="max-h-[90vh] overflow-x-hidden overflow-y-auto sm:max-w-lg [&>*]:min-w-0">
                         <DialogHeader>
                             <DialogTitle>
-                                Edit tab items — #{editTabItemsCheckoutId ?? ''}
+                                {t('Edit tab items — #{id}', {
+                                    id: editTabItemsCheckoutId ?? '',
+                                })}
                             </DialogTitle>
                             <DialogDescription>
-                                Change quantities or remove product lines on
-                                this open tab. Time and table session charges
-                                are not edited here. Use{' '}
-                                <span className="font-medium">Add item</span> to
-                                add products.
+                                {t(
+                                    'Adjust product quantities and table time blocks for this open tab. Use {action} to add products.',
+                                    { action: t('Add item') },
+                                )}
                             </DialogDescription>
                         </DialogHeader>
                         {editTabItemsLoading && (
                             <p className="text-sm text-muted-foreground">
-                                Loading…
+                                {t('Loading…')}
                             </p>
                         )}
-                        {!editTabItemsLoading &&
-                            editTabItemsDraft.length === 0 && (
-                                <p className="text-sm text-muted-foreground">
-                                    No product lines on this tab yet.
-                                </p>
-                            )}
-                        {!editTabItemsLoading &&
-                            editTabItemsDraft.length > 0 && (
-                                <ul className="max-h-64 space-y-3 overflow-y-auto text-sm">
-                                    {editTabItemsDraft.map((line) => (
-                                        <li
-                                            key={line.id}
-                                            className="flex flex-col gap-2 rounded-md border border-border/80 bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between"
-                                        >
-                                            <div className="min-w-0 flex-1">
-                                                <div className="font-medium">
-                                                    {line.product_name ??
-                                                        'Item'}
+                        {!editTabItemsLoading && (
+                            <div className="space-y-4">
+                                {editTabTimeDraft.length > 0 && (
+                                    <div className="space-y-3">
+                                        <h4 className="text-sm font-medium">
+                                            {t('Table time')}
+                                        </h4>
+                                        {editTabTimeDraft.map((session) => (
+                                            <div
+                                                key={session.id}
+                                                className="space-y-2"
+                                            >
+                                                <div className="text-sm font-medium">
+                                                    {session.table_name}
                                                 </div>
-                                                <div className="text-xs text-muted-foreground">
-                                                    {money(line.unit_price)}{' '}
-                                                    each · line{' '}
-                                                    {money(line.total_price)}
-                                                </div>
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                <Label
-                                                    className="sr-only"
-                                                    htmlFor={`tab-qty-${line.id}`}
-                                                >
-                                                    Quantity
-                                                </Label>
-                                                <Input
-                                                    id={`tab-qty-${line.id}`}
-                                                    type="number"
-                                                    min={1}
-                                                    className="h-9 w-20"
-                                                    value={line.quantity}
-                                                    onChange={(e) =>
-                                                        updateEditTabQty(
-                                                            line.id,
-                                                            Number(
-                                                                e.target.value,
-                                                            ) || 1,
+                                                <TimeBlockPicker
+                                                    blocks={catalogBlocks}
+                                                    counts={session.counts}
+                                                    playedLabel={formatPlayedClock(
+                                                        session.played_seconds,
+                                                    )}
+                                                    onChange={(counts) =>
+                                                        setEditTabTimeDraft(
+                                                            (rows) =>
+                                                                rows.map(
+                                                                    (row) =>
+                                                                        row.id ===
+                                                                        session.id
+                                                                            ? {
+                                                                                  ...row,
+                                                                                  counts,
+                                                                              }
+                                                                            : row,
+                                                                ),
                                                         )
                                                     }
                                                 />
-                                                <Button
-                                                    type="button"
-                                                    size="sm"
-                                                    variant="destructive"
-                                                    onClick={() =>
-                                                        removeEditTabLine(
-                                                            line.id,
-                                                        )
-                                                    }
-                                                >
-                                                    Remove
-                                                </Button>
                                             </div>
-                                        </li>
-                                    ))}
-                                </ul>
-                            )}
+                                        ))}
+                                    </div>
+                                )}
+                                <div className="space-y-3">
+                                    <h4 className="text-sm font-medium">
+                                        {t('Products')}
+                                    </h4>
+                                    {editTabItemsDraft.length === 0 ? (
+                                        <p className="text-sm text-muted-foreground">
+                                            {t(
+                                                'No product lines on this tab yet.',
+                                            )}
+                                        </p>
+                                    ) : (
+                                        <ul className="max-h-64 space-y-3 overflow-y-auto text-sm">
+                                            {editTabItemsDraft.map((line) => (
+                                                <li
+                                                    key={line.id}
+                                                    className="flex flex-col gap-2 rounded-md border border-border/80 bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between"
+                                                >
+                                                    <div className="min-w-0 flex-1">
+                                                        <div className="font-medium">
+                                                            {line.product_name ??
+                                                                t('Item')}
+                                                        </div>
+                                                        <div className="text-xs text-muted-foreground">
+                                                            {t(
+                                                                '{price} each · line {total}',
+                                                                {
+                                                                    price: money(
+                                                                        line.unit_price,
+                                                                    ),
+                                                                    total: money(
+                                                                        line.total_price,
+                                                                    ),
+                                                                },
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <Label
+                                                            className="sr-only"
+                                                            htmlFor={`tab-qty-${line.id}`}
+                                                        >
+                                                            {t('Quantity')}
+                                                        </Label>
+                                                        <Input
+                                                            id={`tab-qty-${line.id}`}
+                                                            type="number"
+                                                            min={1}
+                                                            className="h-9 w-20"
+                                                            value={
+                                                                line.quantity
+                                                            }
+                                                            onChange={(e) =>
+                                                                updateEditTabQty(
+                                                                    line.id,
+                                                                    Number(
+                                                                        e.target
+                                                                            .value,
+                                                                    ) || 1,
+                                                                )
+                                                            }
+                                                        />
+                                                        <Button
+                                                            type="button"
+                                                            size="sm"
+                                                            variant="destructive"
+                                                            onClick={() =>
+                                                                removeEditTabLine(
+                                                                    line.id,
+                                                                )
+                                                            }
+                                                        >
+                                                            {t('Remove')}
+                                                        </Button>
+                                                    </div>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                         {editTabItemsError && (
                             <p className="text-sm text-destructive">
-                                {editTabItemsError}
+                                {t(editTabItemsError)}
                             </p>
                         )}
                         <DialogFooter>
@@ -1559,7 +1903,7 @@ export default function CheckoutsIndex({
                                 onClick={closeEditTabItems}
                                 disabled={editTabItemsSaving}
                             >
-                                Close
+                                {t('Close')}
                             </Button>
                             <Button
                                 type="button"
@@ -1568,12 +1912,13 @@ export default function CheckoutsIndex({
                                     editTabItemsSaving ||
                                     editTabItemsLoading ||
                                     (editTabItemsDraft.length === 0 &&
-                                        editTabItemsRemovedIds.length === 0)
+                                        editTabItemsRemovedIds.length === 0 &&
+                                        editTabTimeDraft.length === 0)
                                 }
                             >
                                 {editTabItemsSaving
-                                    ? 'Saving…'
-                                    : 'Save changes'}
+                                    ? t('Saving…')
+                                    : t('Save changes')}
                             </Button>
                         </DialogFooter>
                     </DialogContent>
@@ -1586,12 +1931,14 @@ export default function CheckoutsIndex({
                     <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
                         <DialogHeader>
                             <DialogTitle>
-                                Pay tab — {summary?.table_name ?? 'Open tab'}
+                                {t('Pay tab — {name}', {
+                                    name: summary?.table_name ?? t('Open tab'),
+                                })}
                             </DialogTitle>
                             <DialogDescription>
-                                Enter any amount to record a partial payment, or
-                                cover the remaining balance to close the tab.
-                                Cash may exceed the remaining amount for change.
+                                {t(
+                                    'Enter any amount to record a partial payment, or cover the remaining balance to close the tab. Cash may exceed the remaining amount for change.',
+                                )}
                             </DialogDescription>
                         </DialogHeader>
                         {summary && (
@@ -1600,34 +1947,43 @@ export default function CheckoutsIndex({
                                     {summary.table_sessions.map(
                                         (tableSession) => (
                                             <div
-                                                key={tableSession.table_name}
+                                                key={
+                                                    tableSession.id ??
+                                                    tableSession.table_name
+                                                }
                                                 className="rounded-md border p-2 text-xs"
                                             >
                                                 <div className="font-medium">
                                                     {tableSession.table_name}
                                                 </div>
                                                 <div className="text-muted-foreground">
-                                                    Started{' '}
-                                                    {tableSession.started_at
-                                                        ? formatDateTime(
-                                                              tableSession.started_at,
-                                                          )
-                                                        : '—'}{' '}
-                                                    · Ended{' '}
-                                                    {tableSession.ended_at
-                                                        ? formatDateTime(
-                                                              tableSession.ended_at,
-                                                          )
-                                                        : '—'}
+                                                    {t(
+                                                        'Started {from} · Ended {to}',
+                                                        {
+                                                            from: tableSession.started_at
+                                                                ? formatDateTime(
+                                                                      tableSession.started_at,
+                                                                  )
+                                                                : '—',
+                                                            to: tableSession.ended_at
+                                                                ? formatDateTime(
+                                                                      tableSession.ended_at,
+                                                                  )
+                                                                : '—',
+                                                        },
+                                                    )}
                                                 </div>
                                                 <div>
-                                                    Table time:{' '}
-                                                    {money(
-                                                        tableSession.time_total,
-                                                    )}{' '}
-                                                    · Products:{' '}
-                                                    {money(
-                                                        tableSession.products_total,
+                                                    {t(
+                                                        'Table time: {time} · Products: {products}',
+                                                        {
+                                                            time: money(
+                                                                tableSession.time_total,
+                                                            ),
+                                                            products: money(
+                                                                tableSession.products_total,
+                                                            ),
+                                                        },
                                                     )}
                                                 </div>
                                             </div>
@@ -1635,13 +1991,13 @@ export default function CheckoutsIndex({
                                     )}
                                     <div className="flex justify-between">
                                         <span className="text-muted-foreground">
-                                            Time
+                                            {t('Time')}
                                         </span>
                                         <span>{money(summary.time_total)}</span>
                                     </div>
                                     <div className="flex justify-between">
                                         <span className="text-muted-foreground">
-                                            Items
+                                            {t('Items')}
                                         </span>
                                         <span>
                                             {money(summary.items_total)}
@@ -1649,32 +2005,36 @@ export default function CheckoutsIndex({
                                     </div>
                                     <div className="flex justify-between">
                                         <span className="text-muted-foreground">
-                                            Tab total
+                                            {t('Tab total')}
                                         </span>
                                         <span>
                                             {money(summary.grand_total)}
                                         </span>
                                     </div>
-                                    {Number(summary.amount_paid ?? 0) > 0.01 && (
+                                    {Number(summary.amount_paid ?? 0) >
+                                        0.01 && (
                                         <div className="flex justify-between text-emerald-700 dark:text-emerald-400">
-                                            <span>Paid so far</span>
+                                            <span>{t('Paid so far')}</span>
                                             <span>
                                                 {money(
                                                     Number(
-                                                        summary.amount_paid ?? 0,
+                                                        summary.amount_paid ??
+                                                            0,
                                                     ),
                                                 )}
                                             </span>
                                         </div>
                                     )}
                                     <div className="flex justify-between font-semibold">
-                                        <span>Remaining</span>
+                                        <span>{t('Remaining')}</span>
                                         <span>{money(payRemaining)}</span>
                                     </div>
                                 </div>
                                 <PaymentForm
                                     total={payRemaining}
-                                    totalHint={`Remaining ${money(payRemaining)}`}
+                                    totalHint={t('Remaining {amount}', {
+                                        amount: money(payRemaining),
+                                    })}
                                     cash={cash}
                                     card={card}
                                     transfer={transfer}
@@ -1695,7 +2055,7 @@ export default function CheckoutsIndex({
                                 />
                                 {payError && (
                                     <p className="text-sm text-destructive">
-                                        {payError}
+                                        {t(payError)}
                                     </p>
                                 )}
                                 <DialogFooter className="flex-col gap-2 sm:flex-col">
@@ -1709,13 +2069,22 @@ export default function CheckoutsIndex({
                                     >
                                         {submitting
                                             ? payCloses
-                                                ? 'Completing…'
-                                                : 'Recording…'
+                                                ? t('Completing…')
+                                                : t('Recording…')
                                             : payCloses
-                                              ? `Close tab · ${money(payRemaining)}`
+                                              ? t('Close tab · {amount}', {
+                                                    amount: money(payRemaining),
+                                                })
                                               : payPreview.totalPaid > 0.01
-                                                ? `Record partial · ${money(payApplied)}`
-                                                : 'Enter a payment amount'}
+                                                ? t(
+                                                      'Record partial · {amount}',
+                                                      {
+                                                          amount: money(
+                                                              payApplied,
+                                                          ),
+                                                      },
+                                                  )
+                                                : t('Enter a payment amount')}
                                     </Button>
                                     <Button
                                         variant="ghost"

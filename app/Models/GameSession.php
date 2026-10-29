@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\TableTimeBilling;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
@@ -16,6 +17,11 @@ class GameSession extends Model
         'checkout_session_id',
         'user_id',
         'status',
+        'billing_mode',
+        'prepaid_seconds',
+        'prepaid_amount',
+        'prepaid_blocks',
+        'prepaid_as_timer',
         'started_at',
         'paused_at',
         'total_played_seconds',
@@ -36,6 +42,9 @@ class GameSession extends Model
         'last_resume_at' => 'datetime',
         'ended_at' => 'datetime',
         'time_blocks' => 'array',
+        'prepaid_blocks' => 'array',
+        'prepaid_as_timer' => 'boolean',
+        'prepaid_amount' => 'decimal:2',
         'stock_restored' => 'boolean',
     ];
 
@@ -106,6 +115,17 @@ class GameSession extends Model
         return $this->alert_at_played_seconds !== null;
     }
 
+    public function isPrepaid(): bool
+    {
+        return (string) $this->billing_mode === 'prepaid';
+    }
+
+    /** Prepaid countdown is still the clock, not overtime. */
+    public function prepaidClockActive(): bool
+    {
+        return $this->isPrepaid() && ! $this->prepaid_as_timer && (int) $this->prepaid_seconds > 0;
+    }
+
     public function clearAlert(): void
     {
         $this->alert_at_played_seconds = null;
@@ -114,7 +134,7 @@ class GameSession extends Model
     /** @param  array<string, int>  $counts */
     public function setAlertFromBlocks(array $counts, bool $extend = false, ?\DateTimeInterface $asOf = null): void
     {
-        $addSeconds = \App\Support\TableTimeBilling::secondsForBlocks($counts);
+        $addSeconds = TableTimeBilling::secondsForBlocks($counts);
         if ($addSeconds <= 0) {
             return;
         }

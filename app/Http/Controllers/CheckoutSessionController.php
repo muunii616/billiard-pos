@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\CheckoutSession;
 use App\Models\CheckoutSessionItem;
+use App\Models\GameSession;
 use App\Models\Product;
 use App\Models\Receipt;
 use App\Models\ReceiptPayment;
@@ -12,8 +13,10 @@ use App\Support\InventoryService;
 use App\Support\PaymentPayload;
 use App\Support\PosItemUpserter;
 use App\Support\PosTransaction;
+use App\Support\ProductDeal;
 use App\Support\ReceiptLineItemSnapshot;
 use App\Support\ReceiptPresenter;
+use App\Support\TableTimeBilling;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -40,6 +43,30 @@ class CheckoutSessionController extends Controller
         ];
     }
 
+    /** @return array<int, array<string, mixed>> */
+    private function mapTableSessions(CheckoutSession $checkout): array
+    {
+        $checkout->loadMissing(['gameSessions.table', 'gameSessions.items']);
+
+        return $checkout->gameSessions->map(fn (GameSession $s) => [
+            'id' => $s->id,
+            'table_name' => $s->table->name ?? 'Table',
+            'started_at' => $s->started_at?->copy()->setTimezone(config('app.display_timezone'))->toIso8601String(),
+            'ended_at' => $s->ended_at?->copy()->setTimezone(config('app.display_timezone'))->toIso8601String(),
+            'played_seconds' => (int) $s->total_played_seconds,
+            'time_total' => (float) $s->time_total,
+            'time_blocks' => is_array($s->time_blocks) ? $s->time_blocks : [],
+            'products_total' => (float) $s->items->sum('total_price'),
+            'items' => $s->items->map(fn ($i) => [
+                'id' => $i->id,
+                'product_name' => $i->product_name,
+                'quantity' => (int) $i->quantity,
+                'unit_price' => (float) $i->unit_price,
+                'total_price' => (float) $i->total_price,
+            ])->values()->all(),
+        ])->values()->all();
+    }
+
     public function index(Request $request): Response
     {
         $isAdmin = $request->user()?->role === 'admin';
@@ -60,6 +87,7 @@ class CheckoutSessionController extends Controller
                     'id' => $c->id,
                     'status' => $c->status,
                     'created_at' => $c->created_at->toIso8601String(),
+                    'latest_tab_at' => ($c->latest_tab_at ?? $c->created_at)->toIso8601String(),
                     'table_names' => $tableNames,
                     'time_total' => $totals['time_total'],
                     'items_total' => $totals['items_total'],
@@ -69,27 +97,14 @@ class CheckoutSessionController extends Controller
                     'tab_items' => $c->items->map(fn ($i) => [
                         'id' => $i->id,
                         'product_id' => $i->product_id,
+                        'created_at' => $i->created_at->toIso8601String(),
                         'product_name' => $i->product_name,
                         'product_category' => $i->product_category,
                         'quantity' => $i->quantity,
                         'unit_price' => (float) $i->unit_price,
                         'total_price' => (float) $i->total_price,
                     ])->values()->all(),
-                    'table_sessions' => $c->gameSessions->map(fn ($s) => [
-                        'table_name' => $s->table->name ?? 'Table',
-                        'started_at' => $s->started_at?->copy()->setTimezone(config('app.display_timezone'))->toIso8601String(),
-                        'ended_at' => $s->ended_at?->copy()->setTimezone(config('app.display_timezone'))->toIso8601String(),
-                        'played_seconds' => (int) $s->total_played_seconds,
-                        'time_total' => (float) $s->time_total,
-                        'products_total' => (float) $s->items->sum('total_price'),
-                        'items' => $s->items->map(fn ($i) => [
-                            'id' => $i->id,
-                            'product_name' => $i->product_name,
-                            'quantity' => (int) $i->quantity,
-                            'unit_price' => (float) $i->unit_price,
-                            'total_price' => (float) $i->total_price,
-                        ])->values()->all(),
-                    ])->values()->all(),
+                    'table_sessions' => $this->mapTableSessions($c),
                 ];
             });
 
@@ -100,7 +115,12 @@ class CheckoutSessionController extends Controller
 
         return Inertia::render('checkouts/index', [
             'checkouts' => $checkoutsQuery,
-            'products' => Product::where('is_active', true)->orderBy('name')->get(['id', 'name', 'price', 'category', 'stock_quantity', 'low_stock_threshold']),
+            'products' => Product::where('is_active', true)
+                ->with('dealProduct:id,name,stock_quantity')
+                ->orderBy('name')
+                ->get()
+                ->map(fn (Product $product) => ProductDeal::posPayload($product)),
+            'timeBlocks' => TableTimeBilling::blocks(),
             'receipt' => $receipt,
             'isAdmin' => $isAdmin,
         ]);
@@ -145,23 +165,10 @@ class CheckoutSessionController extends Controller
             'grand_total' => $totals['grand_total'],
             'amount_paid' => $amountPaid,
             'remaining' => $remaining,
-            'table_sessions' => $checkout->gameSessions->load('items')->map(fn ($s) => [
-                'table_name' => $s->table->name ?? 'Table',
-                'started_at' => $s->started_at?->copy()->setTimezone(config('app.display_timezone'))->toIso8601String(),
-                'ended_at' => $s->ended_at?->copy()->setTimezone(config('app.display_timezone'))->toIso8601String(),
-                'played_seconds' => (int) $s->total_played_seconds,
-                'time_total' => (float) $s->time_total,
-                'products_total' => (float) $s->items->sum('total_price'),
-                'items' => $s->items->map(fn ($i) => [
-                    'id' => $i->id,
-                    'product_name' => $i->product_name,
-                    'quantity' => (int) $i->quantity,
-                    'unit_price' => (float) $i->unit_price,
-                    'total_price' => (float) $i->total_price,
-                ])->values()->all(),
-            ])->values()->all(),
+            'table_sessions' => $this->mapTableSessions($checkout),
             'tab_items' => $checkout->items->map(fn ($i) => [
                 'id' => $i->id,
+                'created_at' => $i->created_at->toIso8601String(),
                 'product_id' => $i->product_id,
                 'product_name' => $i->product_name,
                 'product_category' => $i->product_category,
@@ -169,6 +176,7 @@ class CheckoutSessionController extends Controller
                 'unit_price' => (float) $i->unit_price,
                 'total_price' => (float) $i->total_price,
             ])->values()->all(),
+            'time_blocks_catalog' => TableTimeBilling::blocks(),
         ]);
     }
 
@@ -288,7 +296,6 @@ class CheckoutSessionController extends Controller
                 $checkout,
                 $timeTotal,
                 $itemsTotal,
-                $grandTotal,
                 $amountPaid,
                 $remaining,
                 $applied,
@@ -384,22 +391,26 @@ class CheckoutSessionController extends Controller
             if ($checkouts->count() !== $ids->count() || $checkouts->contains(fn ($checkout) => ! $checkout->isOpen())) {
                 throw ValidationException::withMessages(['merge' => 'All selected tabs must still be open.']);
             }
-            if ($checkouts->contains(fn (CheckoutSession $checkout) => CheckoutBalance::amountPaid($checkout) > 0.01)) {
-                throw ValidationException::withMessages(['merge' => 'Cannot merge tabs that already have partial payments.']);
-            }
             $target = $checkouts->firstWhere('id', (int) $data['target_id']);
             $sources = $checkouts->where('id', '!=', $target->id);
             if ($sources->isEmpty()) {
                 throw ValidationException::withMessages(['merge' => 'Select at least one other tab to merge.']);
             }
+            $latestTabAt = $checkouts->map(fn (CheckoutSession $checkout) => $checkout->latest_tab_at ?? $checkout->created_at)->max();
+            $target->update(['latest_tab_at' => $latestTabAt]);
+
             foreach ($sources as $source) {
                 foreach ($source->gameSessions as $session) {
                     $session->update(['checkout_session_id' => $target->id]);
                 }
 
                 foreach ($source->items as $item) {
+                    $itemDay = $item->created_at->copy()->setTimezone(config('app.display_timezone'))->startOfDay();
                     $existing = CheckoutSessionItem::query()
                         ->where('checkout_session_id', $target->id)
+                        // Keep separate lines for products added on different business days.
+                        ->where('created_at', '>=', $itemDay->copy()->utc())
+                        ->where('created_at', '<', $itemDay->copy()->addDay()->utc())
                         ->when(
                             $item->product_id !== null,
                             fn ($query) => $query->where('product_id', $item->product_id)->where('unit_price', $item->unit_price),
@@ -420,6 +431,12 @@ class CheckoutSessionController extends Controller
                         $item->update(['checkout_session_id' => $target->id]);
                     }
                 }
+
+                // Keep partial payments with the surviving tab so remaining balance stays correct.
+                Receipt::query()
+                    ->where('checkout_session_id', $source->id)
+                    ->where('status', 'paid')
+                    ->update(['checkout_session_id' => $target->id]);
 
                 $source->update(['status' => 'merged']);
             }

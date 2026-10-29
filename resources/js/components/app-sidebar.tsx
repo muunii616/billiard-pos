@@ -20,6 +20,7 @@ import {
     SidebarMenuButton,
     SidebarMenuItem,
 } from '@/components/ui/sidebar';
+import { LanguageSwitch } from '@/lib/i18n';
 import { dashboard, overview } from '@/routes';
 import tablesRoutes from '@/routes/tables';
 import type { NavItem } from '@/types';
@@ -119,6 +120,9 @@ export function AppSidebar() {
             </SidebarContent>
 
             <SidebarFooter>
+                <div className="px-2 pb-2 group-data-[collapsible=icon]:px-1">
+                    <LanguageSwitch className="w-full justify-center" />
+                </div>
                 <NavUser />
             </SidebarFooter>
         </Sidebar>

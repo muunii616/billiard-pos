@@ -12,6 +12,7 @@
         "lint": "eslint . --fix",
         "lint:check": "eslint .",
         "types:check": "tsc --noEmit",
+        "test:frontend": "node --test tests/frontend/*.test.mjs",
         "test:e2e": "playwright test",
         "test:e2e:ui": "playwright test --ui"
     },
