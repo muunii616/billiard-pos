@@ -36,16 +36,6 @@ class BilliardTable extends Model
         return GameSession::activeStatuses();
     }
 
-    public function latestSession(array $with = []): ?GameSession
-    {
-        $query = $this->sessions()->latest('id');
-        if (! empty($with)) {
-            $query->with($with);
-        }
-
-        return $query->first();
-    }
-
     public function latestActiveSession(array $with = []): ?GameSession
     {
         // Look up any running/paused session — not only when the newest row is active.

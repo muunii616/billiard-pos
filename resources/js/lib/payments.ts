@@ -11,25 +11,10 @@ export function roundMoney(value: number): number {
     return Math.round(value * 100) / 100;
 }
 
-export function roundToNearestIncrement(
-    value: number,
-    increment = 500,
-): number {
-    const safeIncrement = Math.max(1, Math.floor(increment || 500));
-
-    return Math.round((Number(value) || 0) / safeIncrement) * safeIncrement;
-}
-
 export function formatMoney(value: number): string {
     return `₮${new Intl.NumberFormat('mn-MN', {
         maximumFractionDigits: 0,
     }).format(Number(value) || 0)}`;
-}
-
-export function formatPaymentMethod(method: string): string {
-    return method
-        .replaceAll('_', ' ')
-        .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export function clampNonCashInput(raw: string, maxAllowed: number): string {

@@ -54,7 +54,12 @@ import {
     TableRow,
 } from '@/components/ui/table';
 import AppLayout from '@/layouts/app-layout';
-import { formatDateTime, businessYear, POS_TIME_ZONE } from '@/lib/dates';
+import {
+    businessYear,
+    formatClock as formatPlayed,
+    formatDateTime,
+    POS_TIME_ZONE,
+} from '@/lib/dates';
 import { jsonHeaders } from '@/lib/http';
 import { paymentMethodName, useCategoryLabel, useI18n } from '@/lib/i18n';
 import { formatMoney } from '@/lib/payments';
@@ -537,15 +542,6 @@ export default function Overview({
             hour: '2-digit',
             minute: '2-digit',
         });
-    };
-    const formatPlayed = (seconds: number) => {
-        const s = Math.max(0, Math.floor(seconds || 0));
-        const h = Math.floor(s / 3600);
-        const m = Math.floor((s % 3600) / 60);
-        const sec = s % 60;
-        const pad = (n: number) => n.toString().padStart(2, '0');
-
-        return `${pad(h)}:${pad(m)}:${pad(sec)}`;
     };
     const stockLabel = (restored: boolean | null) => {
         if (restored === true) {

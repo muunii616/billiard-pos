@@ -5,6 +5,7 @@ import { EmptyState } from '@/components/empty-state';
 import { PageHeader } from '@/components/page-header';
 import { Button } from '@/components/ui/button';
 import AppLayout from '@/layouts/app-layout';
+import { formatClock as formatElapsed } from '@/lib/dates';
 import { useI18n } from '@/lib/i18n';
 import { formatMoney } from '@/lib/payments';
 import tablesRoutes from '@/routes/tables';
@@ -51,16 +52,6 @@ type Props = {
     running_sessions: RunningSession[];
     isAdmin: boolean;
 };
-
-function formatElapsed(seconds: number): string {
-    const s = Math.max(0, Math.floor(seconds));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    const pad = (n: number) => n.toString().padStart(2, '0');
-
-    return `${pad(h)}:${pad(m)}:${pad(sec)}`;
-}
 
 function formatDuration(seconds: number): string {
     const m = Math.floor(seconds / 60);

@@ -94,20 +94,6 @@ export function formatBlockSummary(
     return parts.length > 0 ? parts.join(' · ') : 'No time blocks';
 }
 
-export function formatCountdown(seconds: number): string {
-    const s = Math.max(0, Math.floor(seconds));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    const pad = (n: number) => n.toString().padStart(2, '0');
-
-    if (h > 0) {
-        return `${pad(h)}:${pad(m)}:${pad(sec)}`;
-    }
-
-    return `${pad(m)}:${pad(sec)}`;
-}
-
 /** Play a short repeating beep using Web Audio (no asset required). */
 export function playAlertBeep(
     audioContext?: AudioContext | null,

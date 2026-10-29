@@ -51,6 +51,7 @@ import {
 } from '@/components/ui/select';
 import AppLayout from '@/layouts/app-layout';
 import { categoryBadgeClass, normalizeCategory } from '@/lib/categories';
+import { formatClock as formatElapsedSeconds } from '@/lib/dates';
 import { jsonHeaders } from '@/lib/http';
 import { useI18n } from '@/lib/i18n';
 import { inertiaPost } from '@/lib/inertia-action';
@@ -137,16 +138,6 @@ type CheckoutSummary = {
     prepaid_amount?: number;
     prepaid_as_timer?: boolean;
 };
-
-function formatElapsedSeconds(seconds: number): string {
-    const s = Math.max(0, Math.floor(seconds));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    const pad = (n: number) => n.toString().padStart(2, '0');
-
-    return `${pad(h)}:${pad(m)}:${pad(sec)}`;
-}
 
 function sessionFlags(table: Table) {
     const hasSession = Boolean(

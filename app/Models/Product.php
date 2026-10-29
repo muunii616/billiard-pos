@@ -47,9 +47,4 @@ class Product extends Model
     {
         return $this->belongsTo(self::class, 'deal_product_id');
     }
-
-    public function dealOffers(): HasMany
-    {
-        return $this->hasMany(self::class, 'deal_product_id');
-    }
 }

@@ -40,6 +40,20 @@ export function groupTabsByDate<
     return Array.from(groups, ([date, tabs]) => ({ date, tabs }));
 }
 
+export function formatClock(seconds: number): string {
+    const s = Math.max(0, Math.floor(seconds));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    const pad = (n: number) => n.toString().padStart(2, '0');
+
+    return `${pad(h)}:${pad(m)}:${pad(sec)}`;
+}
+
+export function formatCountdown(seconds: number): string {
+    return formatClock(seconds).replace(/^00:/, '');
+}
+
 export function formatDateTime(value: string): string {
     return new Date(value).toLocaleString('en-GB', {
         timeZone: POS_TIME_ZONE,
