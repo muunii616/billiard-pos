@@ -39,7 +39,7 @@ jobs:
           php artisan key:generate
 
       - name: Generate Wayfinder Types
-        run: php artisan wayfinder:generate
+        run: npm run wayfinder:generate
 
       - name: Run Pint
         run: composer lint:check
