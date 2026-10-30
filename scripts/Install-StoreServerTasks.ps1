@@ -29,9 +29,13 @@ New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
 {
     admin off
     auto_https off
+    servers 127.0.0.1:8080 {
+        trusted_proxies static 127.0.0.1/32 ::1/128
+    }
 }
 
-http://127.0.0.1:8080 {
+http://:8080 {
+    bind 127.0.0.1
     root * "$publicDirectory"
     encode gzip
     php_fastcgi 127.0.0.1:9070
