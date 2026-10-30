@@ -70,6 +70,7 @@ class ReceiptAdminController extends Controller
     {
         return PosTransaction::receipt($receipt, function (Receipt $receipt) use ($request) {
             $data = $request->validate([
+                'reason' => ['required', 'string', 'max:2000'],
                 'status' => ['sometimes', 'required', 'string', 'in:paid,unpaid,voided'],
                 'paid_at' => ['nullable', 'date'],
                 'customer_email' => ['nullable', 'email', 'max:255'],
@@ -161,7 +162,7 @@ class ReceiptAdminController extends Controller
     {
         return PosTransaction::receipt($receipt, function (Receipt $receipt) use ($request) {
             $data = $request->validate([
-                'reason' => ['nullable', 'string', 'max:255'],
+                'reason' => ['required', 'string', 'max:2000'],
             ]);
 
             $receipt->update([
@@ -171,15 +172,6 @@ class ReceiptAdminController extends Controller
             ]);
 
             return response()->json(['message' => 'Receipt voided.']);
-        });
-    }
-
-    public function destroy(Receipt $receipt)
-    {
-        return PosTransaction::receipt($receipt, function (Receipt $receipt) {
-            $receipt->delete();
-
-            return response()->json(['message' => 'Receipt deleted.']);
         });
     }
 

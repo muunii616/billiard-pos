@@ -85,6 +85,15 @@ export default defineConfig(({ command, mode }) => {
         esbuild: {
             jsx: 'automatic',
         },
+        build: {
+            rollupOptions: {
+                output: {
+                    manualChunks: {
+                        framework: ['react', 'react-dom', 'react-dom/client'],
+                    },
+                },
+            },
+        },
         server: {
             warmup: {
                 clientFiles: [

@@ -132,7 +132,7 @@ class ProductController extends Controller
 
     public function destroy(Product $product)
     {
-        $product->delete();
+        $product->update(['is_active' => false]);
 
         return redirect()->route('admin.products.index');
     }
@@ -140,6 +140,7 @@ class ProductController extends Controller
     public function adjustStock(Request $request)
     {
         $data = $request->validate([
+            'reason' => ['required', 'string', 'max:2000'],
             'items' => ['required', 'array', 'min:1'],
             'items.*.product_id' => ['required', 'integer', 'exists:products,id'],
             'items.*.quantity' => ['required', 'integer', 'not_in:0'],
@@ -167,6 +168,7 @@ class ProductController extends Controller
                     'user_id' => $request->user()->id,
                     'quantity_change' => (int) $item['quantity'],
                     'stock_after' => $next,
+                    'note' => $data['reason'],
                     'adjusted_at' => now(),
                 ]);
             }
@@ -182,7 +184,7 @@ class ProductController extends Controller
             'items' => ['required', 'array', 'min:1'],
             'items.*.product_id' => ['required', 'integer', 'exists:products,id'],
             'items.*.quantity' => ['required', 'integer', 'min:1'],
-            'note' => ['nullable', 'string', 'max:2000'],
+            'note' => ['required', 'string', 'max:2000'],
         ]);
 
         DB::transaction(function () use ($data) {

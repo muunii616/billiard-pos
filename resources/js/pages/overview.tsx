@@ -71,6 +71,8 @@ type Summary = {
     payments: Record<string, number>;
 };
 
+type BreakdownItem = { name: string; value: number };
+
 type Props = {
     isAdmin?: boolean;
     mode: 'daily' | 'monthly';
@@ -278,6 +280,7 @@ export default function Overview({
     const [editStatus, setEditStatus] = useState<'paid' | 'unpaid' | 'voided'>(
         'paid',
     );
+    const [editReceiptReason, setEditReceiptReason] = useState('');
     const [detailInvoice, setDetailInvoice] = useState<InvoiceDetail | null>(
         null,
     );
@@ -355,6 +358,7 @@ export default function Overview({
         setReceiptOpen(true);
         setReceiptLoading(true);
         setReceiptError(null);
+        setEditReceiptReason('');
 
         try {
             const res = await fetch(`/admin/receipts/${receiptId}`, {
@@ -379,7 +383,9 @@ export default function Overview({
     };
 
     const saveReceiptBasics = async () => {
-        if (!receipt) {
+        if (!receipt || editReceiptReason.trim() === '') {
+            setReceiptError('Reason is required.');
+
             return;
         }
 
@@ -394,6 +400,7 @@ export default function Overview({
                 body: JSON.stringify({
                     customer_email: editCustomerEmail.trim() || null,
                     status: editStatus,
+                    reason: editReceiptReason.trim(),
                 }),
             });
 
@@ -598,6 +605,95 @@ export default function Overview({
     );
     const incomeChartConfig: ChartConfig = {
         income: { label: t('Income'), color: 'var(--chart-1)' },
+    };
+    const renderBreakdown = (
+        title: string,
+        empty: string,
+        data: BreakdownItem[],
+        config: ChartConfig,
+        colorFor: (item: BreakdownItem, index: number) => string,
+        labelFor: (name: string) => string,
+    ) => {
+        const total = data.reduce((sum, item) => sum + item.value, 0);
+
+        return (
+            <Card className="border-sidebar-border/70 bg-background py-4 dark:border-sidebar-border">
+                <CardHeader className="px-4 pb-0">
+                    <CardTitle className="text-sm font-semibold">
+                        {title}
+                    </CardTitle>
+                </CardHeader>
+                <CardContent className="px-4">
+                    {data.length === 0 ? (
+                        <p className="py-8 text-center text-sm text-muted-foreground">
+                            {empty}
+                        </p>
+                    ) : (
+                        <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center">
+                            <ChartContainer
+                                config={config}
+                                className="mx-auto aspect-auto h-[200px] w-[200px]"
+                            >
+                                <PieChart>
+                                    <ChartTooltip
+                                        content={
+                                            <ChartTooltipContent
+                                                hideLabel
+                                                formatter={
+                                                    moneyTooltipFormatter
+                                                }
+                                            />
+                                        }
+                                    />
+                                    <Pie
+                                        data={data}
+                                        dataKey="value"
+                                        nameKey="name"
+                                        innerRadius={48}
+                                        outerRadius={80}
+                                    >
+                                        {data.map((item, index) => (
+                                            <Cell
+                                                key={item.name}
+                                                fill={colorFor(item, index)}
+                                            />
+                                        ))}
+                                    </Pie>
+                                </PieChart>
+                            </ChartContainer>
+                            <ul className="space-y-2 text-sm">
+                                {data.map((item, index) => (
+                                    <li
+                                        key={item.name}
+                                        className="flex items-center justify-between gap-3"
+                                    >
+                                        <span className="flex items-center gap-2">
+                                            <span
+                                                className="h-2.5 w-2.5 rounded-full"
+                                                style={{
+                                                    backgroundColor: colorFor(
+                                                        item,
+                                                        index,
+                                                    ),
+                                                }}
+                                            />
+                                            {labelFor(item.name)}
+                                        </span>
+                                        <span className="text-muted-foreground tabular-nums">
+                                            {money(item.value)} (
+                                            {Math.round(
+                                                (item.value / total) * 100,
+                                            )}
+                                            %)
+                                        </span>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+        );
     };
 
     const handleMonthlyPick = (monthIndex: number) => {
@@ -946,199 +1042,25 @@ export default function Overview({
                 </div>
 
                 <div className="grid gap-4 xl:grid-cols-2">
-                    <Card className="border-sidebar-border/70 bg-background py-4 dark:border-sidebar-border">
-                        <CardHeader className="px-4 pb-0">
-                            <CardTitle className="text-sm font-semibold">
-                                {t('Sales breakdown')}
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent className="px-4">
-                            {salesData.length === 0 ? (
-                                <p className="py-8 text-center text-sm text-muted-foreground">
-                                    {t('No sales this period.')}
-                                </p>
-                            ) : (
-                                <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center">
-                                    <ChartContainer
-                                        config={salesChartConfig}
-                                        className="mx-auto aspect-auto h-[200px] w-[200px]"
-                                    >
-                                        <PieChart>
-                                            <ChartTooltip
-                                                content={
-                                                    <ChartTooltipContent
-                                                        hideLabel
-                                                        formatter={
-                                                            moneyTooltipFormatter
-                                                        }
-                                                    />
-                                                }
-                                            />
-                                            <Pie
-                                                data={salesData}
-                                                dataKey="value"
-                                                nameKey="name"
-                                                innerRadius={48}
-                                                outerRadius={80}
-                                            >
-                                                {salesData.map(
-                                                    (item, index) => (
-                                                        <Cell
-                                                            key={item.name}
-                                                            fill={
-                                                                salesColorMap[
-                                                                    item.name
-                                                                ] ??
-                                                                paymentPalette[
-                                                                    index %
-                                                                        paymentPalette.length
-                                                                ]
-                                                            }
-                                                        />
-                                                    ),
-                                                )}
-                                            </Pie>
-                                        </PieChart>
-                                    </ChartContainer>
-                                    <ul className="space-y-2 text-sm">
-                                        {salesData.map((item, index) => {
-                                            const total = salesData.reduce(
-                                                (sum, row) => sum + row.value,
-                                                0,
-                                            );
-                                            const color =
-                                                salesColorMap[item.name] ??
-                                                paymentPalette[
-                                                    index %
-                                                        paymentPalette.length
-                                                ];
-
-                                            return (
-                                                <li
-                                                    key={item.name}
-                                                    className="flex items-center justify-between gap-3"
-                                                >
-                                                    <span className="flex items-center gap-2">
-                                                        <span
-                                                            className="h-2.5 w-2.5 rounded-full"
-                                                            style={{
-                                                                backgroundColor:
-                                                                    color,
-                                                            }}
-                                                        />
-                                                        {salesLabel(item.name)}
-                                                    </span>
-                                                    <span className="text-muted-foreground tabular-nums">
-                                                        {money(item.value)} (
-                                                        {Math.round(
-                                                            (item.value /
-                                                                total) *
-                                                                100,
-                                                        )}
-                                                        %)
-                                                    </span>
-                                                </li>
-                                            );
-                                        })}
-                                    </ul>
-                                </div>
-                            )}
-                        </CardContent>
-                    </Card>
-
-                    <Card className="border-sidebar-border/70 bg-background py-4 dark:border-sidebar-border">
-                        <CardHeader className="px-4 pb-0">
-                            <CardTitle className="text-sm font-semibold">
-                                {t('Payment type breakdown')}
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent className="px-4">
-                            {paymentData.length === 0 ? (
-                                <p className="py-8 text-center text-sm text-muted-foreground">
-                                    {t('No payments this period.')}
-                                </p>
-                            ) : (
-                                <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center">
-                                    <ChartContainer
-                                        config={paymentsChartConfig}
-                                        className="mx-auto aspect-auto h-[200px] w-[200px]"
-                                    >
-                                        <PieChart>
-                                            <ChartTooltip
-                                                content={
-                                                    <ChartTooltipContent
-                                                        hideLabel
-                                                        formatter={
-                                                            moneyTooltipFormatter
-                                                        }
-                                                    />
-                                                }
-                                            />
-                                            <Pie
-                                                data={paymentData}
-                                                dataKey="value"
-                                                nameKey="name"
-                                                innerRadius={48}
-                                                outerRadius={80}
-                                            >
-                                                {paymentData.map(
-                                                    (item, index) => (
-                                                        <Cell
-                                                            key={item.name}
-                                                            fill={
-                                                                paymentPalette[
-                                                                    index %
-                                                                        paymentPalette.length
-                                                                ]
-                                                            }
-                                                        />
-                                                    ),
-                                                )}
-                                            </Pie>
-                                        </PieChart>
-                                    </ChartContainer>
-                                    <ul className="space-y-2 text-sm">
-                                        {paymentData.map((item, index) => {
-                                            const total = paymentData.reduce(
-                                                (sum, row) => sum + row.value,
-                                                0,
-                                            );
-
-                                            return (
-                                                <li
-                                                    key={item.name}
-                                                    className="flex items-center justify-between gap-3"
-                                                >
-                                                    <span className="flex items-center gap-2">
-                                                        <span
-                                                            className="h-2.5 w-2.5 rounded-full"
-                                                            style={{
-                                                                backgroundColor:
-                                                                    paymentPalette[
-                                                                        index %
-                                                                            paymentPalette.length
-                                                                    ],
-                                                            }}
-                                                        />
-                                                        {payLabel(item.name)}
-                                                    </span>
-                                                    <span className="text-muted-foreground tabular-nums">
-                                                        {money(item.value)} (
-                                                        {Math.round(
-                                                            (item.value /
-                                                                total) *
-                                                                100,
-                                                        )}
-                                                        %)
-                                                    </span>
-                                                </li>
-                                            );
-                                        })}
-                                    </ul>
-                                </div>
-                            )}
-                        </CardContent>
-                    </Card>
+                    {renderBreakdown(
+                        t('Sales breakdown'),
+                        t('No sales this period.'),
+                        salesData,
+                        salesChartConfig,
+                        (item, index) =>
+                            salesColorMap[item.name] ??
+                            paymentPalette[index % paymentPalette.length],
+                        salesLabel,
+                    )}
+                    {renderBreakdown(
+                        t('Payment type breakdown'),
+                        t('No payments this period.'),
+                        paymentData,
+                        paymentsChartConfig,
+                        (_, index) =>
+                            paymentPalette[index % paymentPalette.length],
+                        payLabel,
+                    )}
                 </div>
 
                 {mode === 'monthly' && (
@@ -1611,6 +1533,7 @@ export default function Overview({
                         setReceipt(null);
                         setReceiptError(null);
                         setReceiptLoading(false);
+                        setEditReceiptReason('');
                     }
                 }}
             >
@@ -1689,6 +1612,26 @@ export default function Overview({
                                         </SelectContent>
                                     </Select>
                                 </div>
+                                <div className="space-y-1 sm:col-span-2">
+                                    <Label
+                                        className="text-xs"
+                                        htmlFor="receipt-correction-reason"
+                                    >
+                                        {t('Reason')} {t('(required)')}
+                                    </Label>
+                                    <Input
+                                        id="receipt-correction-reason"
+                                        value={editReceiptReason}
+                                        onChange={(event) =>
+                                            setEditReceiptReason(
+                                                event.target.value,
+                                            )
+                                        }
+                                        placeholder={t(
+                                            'Explain why this correction is needed',
+                                        )}
+                                    />
+                                </div>
                             </div>
 
                             <DialogFooter>
@@ -1698,7 +1641,10 @@ export default function Overview({
                                 >
                                     {t('Close')}
                                 </Button>
-                                <Button onClick={saveReceiptBasics}>
+                                <Button
+                                    onClick={saveReceiptBasics}
+                                    disabled={editReceiptReason.trim() === ''}
+                                >
                                     {t('Save')}
                                 </Button>
                             </DialogFooter>

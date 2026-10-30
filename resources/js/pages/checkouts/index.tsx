@@ -52,15 +52,26 @@ import { countsFromStored, DEFAULT_TIME_BLOCKS } from '@/lib/time-blocks';
 import type { TimeBlock, TimeBlockCounts } from '@/lib/time-blocks';
 import receiptsRoutes from '@/routes/receipts';
 
-type TabItemLine = {
+type CheckoutItemLine = {
     id: number;
-    created_at?: string;
-    product_id: number | null;
     product_name: string | null;
-    product_category?: string | null;
     quantity: number;
     unit_price: number;
     total_price: number;
+};
+
+type TabItemLine = CheckoutItemLine & {
+    created_at?: string;
+    product_id: number | null;
+    product_category?: string | null;
+};
+
+type CheckoutAmounts = {
+    time_total: number;
+    items_total: number;
+    grand_total: number;
+    amount_paid?: number;
+    remaining?: number;
 };
 
 type TableSessionLine = {
@@ -72,26 +83,15 @@ type TableSessionLine = {
     time_total: number;
     time_blocks?: Record<string, number>;
     products_total: number;
-    items?: {
-        id: number;
-        product_name: string | null;
-        quantity: number;
-        unit_price: number;
-        total_price: number;
-    }[];
+    items?: CheckoutItemLine[];
 };
 
-type CheckoutRow = {
+type CheckoutRow = CheckoutAmounts & {
     id: number;
     status: string;
     created_at: string;
     latest_tab_at?: string | null;
     table_names: string[];
-    time_total: number;
-    items_total: number;
-    grand_total: number;
-    amount_paid?: number;
-    remaining?: number;
     tab_items?: TabItemLine[];
     table_sessions: TableSessionLine[];
 };
@@ -109,15 +109,10 @@ type Product = {
     deal_buy_qty?: number | null;
 };
 
-type CheckoutSummary = {
+type CheckoutSummary = CheckoutAmounts & {
     checkout_id: number;
     table_name: string;
     table_sessions: TableSessionLine[];
-    time_total: number;
-    items_total: number;
-    grand_total: number;
-    amount_paid?: number;
-    remaining?: number;
     tab_items?: TabItemLine[];
     time_blocks_catalog?: TimeBlock[];
 };
@@ -189,6 +184,7 @@ export default function CheckoutsIndex({
     const [editTabItemsError, setEditTabItemsError] = useState<string | null>(
         null,
     );
+    const [editTabItemsReason, setEditTabItemsReason] = useState('');
     const [editTabTimeDraft, setEditTabTimeDraft] = useState<
         {
             id: number;
@@ -215,7 +211,23 @@ export default function CheckoutsIndex({
     const [deleteTabSubmitting, setDeleteTabSubmitting] = useState(false);
     const [reopenTabConfirmOpen, setReopenTabConfirmOpen] = useState(false);
     const [reopenTabId, setReopenTabId] = useState<number | null>(null);
+    const [reopenTabReason, setReopenTabReason] = useState('');
     const [actionError, setActionError] = useState<string | null>(null);
+
+    const fetchSummary = async (checkoutId: number) => {
+        const response = await fetch(`/checkouts/${checkoutId}/summary`);
+
+        if (!response.ok) {
+            throw new Error('Failed to load checkout summary.');
+        }
+
+        return response.json() as Promise<CheckoutSummary>;
+    };
+    const reloadCheckouts = () =>
+        router.get('/checkouts', showAll ? { all: 1 } : {}, {
+            preserveScroll: true,
+            replace: true,
+        });
 
     useEffect(() => {
         if (!payModalOpen || !summary) {
@@ -318,17 +330,28 @@ export default function CheckoutsIndex({
         setTransfer('');
         setCustomerEmail('');
         setPayModalOpen(true);
-        fetch(`/checkouts/${id}/summary`)
-            .then((res) => {
-                if (!res.ok) {
-                    throw new Error('Could not load summary');
-                }
+        void fetchSummary(id)
+            .then(setSummary)
+            .catch(() => setPayError('Failed to load summary.'));
+    };
 
-                return res.json();
-            })
-            .then((data: CheckoutSummary) => setSummary(data))
-            .catch(() => setPayError('Failed to load summary.'))
-            .finally(() => {});
+    const openTabDetails = (row: CheckoutRow) => {
+        setViewTabDetailsRow(row);
+        setViewTabDetailsOpen(true);
+    };
+
+    const openDeleteTab = (id: number) => {
+        setDeleteTabId(id);
+        setDeleteTabReason('');
+        setDeleteTabRestock(true);
+        setDeleteTabError(null);
+        setDeleteTabConfirmOpen(true);
+    };
+
+    const openReopenTab = (id: number) => {
+        setReopenTabId(id);
+        setReopenTabReason('');
+        setReopenTabConfirmOpen(true);
     };
 
     const closePayModal = () => {
@@ -341,18 +364,12 @@ export default function CheckoutsIndex({
         setEditTabItemsCheckoutId(checkoutId);
         setEditTabItemsOpen(true);
         setEditTabItemsError(null);
+        setEditTabItemsReason('');
         setEditTabItemsRemovedIds([]);
         setEditTabItemsLoading(true);
         setEditTabItemsDraft([]);
         setEditTabTimeDraft([]);
-        fetch(`/checkouts/${checkoutId}/summary`)
-            .then((res) => {
-                if (!res.ok) {
-                    throw new Error('load');
-                }
-
-                return res.json();
-            })
+        void fetchSummary(checkoutId)
             .then((data: CheckoutSummary) => {
                 const blocks =
                     data.time_blocks_catalog &&
@@ -380,10 +397,16 @@ export default function CheckoutsIndex({
         setEditTabItemsRemovedIds([]);
         setEditTabTimeDraft([]);
         setEditTabItemsError(null);
+        setEditTabItemsReason('');
     };
 
     const saveEditTabItems = async () => {
-        if (editTabItemsCheckoutId == null) {
+        if (
+            editTabItemsCheckoutId == null ||
+            editTabItemsReason.trim() === ''
+        ) {
+            setEditTabItemsError('Reason is required.');
+
             return;
         }
 
@@ -408,7 +431,11 @@ export default function CheckoutsIndex({
                     method: 'PUT',
                     headers: jsonHeaders(),
                     credentials: 'same-origin',
-                    body: JSON.stringify({ items, time_sessions }),
+                    body: JSON.stringify({
+                        items,
+                        time_sessions,
+                        reason: editTabItemsReason.trim(),
+                    }),
                 },
             );
             const data = await res.json().catch(() => ({}));
@@ -710,10 +737,8 @@ export default function CheckoutsIndex({
             return;
         }
 
-        if (!adminEnabled && deleteTabReason.trim() === '') {
-            setDeleteTabError(
-                'Employees must provide a reason to delete a tab.',
-            );
+        if (deleteTabReason.trim() === '') {
+            setDeleteTabError('Reason is required to void a tab.');
 
             return;
         }
@@ -748,10 +773,7 @@ export default function CheckoutsIndex({
             setDeleteTabId(null);
             setDeleteTabReason('');
             setDeleteTabRestock(true);
-            router.get('/checkouts', showAll ? { all: 1 } : {}, {
-                preserveScroll: true,
-                replace: true,
-            });
+            reloadCheckouts();
         } catch {
             setDeleteTabError('Failed to delete tab.');
         } finally {
@@ -760,7 +782,7 @@ export default function CheckoutsIndex({
     };
 
     const confirmReopenTab = async () => {
-        if (reopenTabId == null) {
+        if (reopenTabId == null || reopenTabReason.trim() === '') {
             return;
         }
 
@@ -768,11 +790,9 @@ export default function CheckoutsIndex({
             method: 'POST',
             headers: jsonHeaders(),
             credentials: 'same-origin',
-            body: '{}',
+            body: JSON.stringify({ reason: reopenTabReason.trim() }),
         });
         const data = await res.json().catch(() => ({}));
-        setReopenTabConfirmOpen(false);
-        setReopenTabId(null);
 
         if (!res.ok) {
             setActionError(data.message || 'Failed to reopen tab.');
@@ -780,10 +800,10 @@ export default function CheckoutsIndex({
             return;
         }
 
-        router.get('/checkouts', showAll ? { all: 1 } : {}, {
-            preserveScroll: true,
-            replace: true,
-        });
+        setReopenTabConfirmOpen(false);
+        setReopenTabId(null);
+        setReopenTabReason('');
+        reloadCheckouts();
     };
 
     return (
@@ -885,10 +905,7 @@ export default function CheckoutsIndex({
                         <div className="space-y-3">
                             <div className="space-y-2">
                                 <Label htmlFor="delete-tab-reason">
-                                    {t('Reason')}{' '}
-                                    {adminEnabled
-                                        ? t('(optional for admin)')
-                                        : t('(required)')}
+                                    {t('Reason')} {t('(required)')}
                                 </Label>
                                 <textarea
                                     id="delete-tab-reason"
@@ -898,13 +915,9 @@ export default function CheckoutsIndex({
                                         setDeleteTabReason(event.target.value);
                                         setDeleteTabError(null);
                                     }}
-                                    placeholder={
-                                        adminEnabled
-                                            ? t('Optional note for the record')
-                                            : t(
-                                                  'Explain why this tab is being deleted',
-                                              )
-                                    }
+                                    placeholder={t(
+                                        'Explain why this tab is being deleted',
+                                    )}
                                 />
                             </div>
                             <label className="flex items-start gap-3 rounded-md border border-border/70 bg-muted/30 p-3 text-sm">
@@ -938,7 +951,10 @@ export default function CheckoutsIndex({
                             </AlertDialogCancel>
                             <AlertDialogAction
                                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                disabled={deleteTabSubmitting}
+                                disabled={
+                                    deleteTabSubmitting ||
+                                    deleteTabReason.trim() === ''
+                                }
                                 onClick={async (e) => {
                                     e.preventDefault();
                                     await confirmDeleteTab();
@@ -976,9 +992,28 @@ export default function CheckoutsIndex({
                                     : ''}
                             </AlertDialogDescription>
                         </AlertDialogHeader>
+                        <div className="space-y-2">
+                            <Label htmlFor="reopen-tab-reason">
+                                {t('Reason')} {t('(required)')}
+                            </Label>
+                            <textarea
+                                id="reopen-tab-reason"
+                                className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                value={reopenTabReason}
+                                onChange={(event) =>
+                                    setReopenTabReason(event.target.value)
+                                }
+                                placeholder={t(
+                                    'Explain why this tab must be reopened',
+                                )}
+                            />
+                        </div>
                         <AlertDialogFooter>
                             <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
-                            <AlertDialogAction onClick={confirmReopenTab}>
+                            <AlertDialogAction
+                                onClick={confirmReopenTab}
+                                disabled={reopenTabReason.trim() === ''}
+                            >
                                 {t('Reopen')}
                             </AlertDialogAction>
                         </AlertDialogFooter>
@@ -1247,14 +1282,9 @@ export default function CheckoutsIndex({
                                                 <Button
                                                     size="sm"
                                                     variant="outline"
-                                                    onClick={() => {
-                                                        setViewTabDetailsRow(
-                                                            row,
-                                                        );
-                                                        setViewTabDetailsOpen(
-                                                            true,
-                                                        );
-                                                    }}
+                                                    onClick={() =>
+                                                        openTabDetails(row)
+                                                    }
                                                 >
                                                     {t('View details')}
                                                 </Button>
@@ -1300,14 +1330,11 @@ export default function CheckoutsIndex({
                                                         <Button
                                                             size="sm"
                                                             variant="outline"
-                                                            onClick={() => {
-                                                                setReopenTabId(
+                                                            onClick={() =>
+                                                                openReopenTab(
                                                                     row.id,
-                                                                );
-                                                                setReopenTabConfirmOpen(
-                                                                    true,
-                                                                );
-                                                            }}
+                                                                )
+                                                            }
                                                         >
                                                             {t('Reopen')}
                                                         </Button>
@@ -1316,23 +1343,11 @@ export default function CheckoutsIndex({
                                                     <Button
                                                         size="sm"
                                                         variant="destructive"
-                                                        onClick={() => {
-                                                            setDeleteTabId(
+                                                        onClick={() =>
+                                                            openDeleteTab(
                                                                 row.id,
-                                                            );
-                                                            setDeleteTabReason(
-                                                                '',
-                                                            );
-                                                            setDeleteTabRestock(
-                                                                true,
-                                                            );
-                                                            setDeleteTabError(
-                                                                null,
-                                                            );
-                                                            setDeleteTabConfirmOpen(
-                                                                true,
-                                                            );
-                                                        }}
+                                                            )
+                                                        }
                                                     >
                                                         {t('Delete')}
                                                     </Button>
@@ -1887,6 +1902,26 @@ export default function CheckoutsIndex({
                                 {t(editTabItemsError)}
                             </p>
                         )}
+                        {!editTabItemsLoading && (
+                            <div className="space-y-2">
+                                <Label htmlFor="edit-tab-reason">
+                                    {t('Reason')} {t('(required)')}
+                                </Label>
+                                <textarea
+                                    id="edit-tab-reason"
+                                    className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    value={editTabItemsReason}
+                                    onChange={(event) =>
+                                        setEditTabItemsReason(
+                                            event.target.value,
+                                        )
+                                    }
+                                    placeholder={t(
+                                        'Explain why this correction is needed',
+                                    )}
+                                />
+                            </div>
+                        )}
                         <DialogFooter>
                             <Button
                                 type="button"
@@ -1902,6 +1937,7 @@ export default function CheckoutsIndex({
                                 disabled={
                                     editTabItemsSaving ||
                                     editTabItemsLoading ||
+                                    editTabItemsReason.trim() === '' ||
                                     (editTabItemsDraft.length === 0 &&
                                         editTabItemsRemovedIds.length === 0 &&
                                         editTabTimeDraft.length === 0)

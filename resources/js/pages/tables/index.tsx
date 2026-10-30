@@ -106,20 +106,30 @@ type Table = {
     current_session: TableSession | null;
 };
 
+type Product = {
+    id: number;
+    name: string;
+    price: string;
+    category: string;
+    stock_quantity: number;
+    low_stock_threshold: number;
+    is_deal?: boolean;
+    deal_active?: boolean;
+    deal_label?: string | null;
+    deal_buy_qty?: number | null;
+};
+
+type CartItem = {
+    productId: number;
+    name: string;
+    price: number;
+    quantity: number;
+    category: string;
+};
+
 type Props = {
     tables: Table[];
-    products: {
-        id: number;
-        name: string;
-        price: string;
-        category: string;
-        stock_quantity: number;
-        low_stock_threshold: number;
-        is_deal?: boolean;
-        deal_active?: boolean;
-        deal_label?: string | null;
-        deal_buy_qty?: number | null;
-    }[];
+    products: Product[];
     timeBlocks?: TimeBlock[];
     receipt?: InvoiceReceipt | null;
     isAdmin?: boolean;
@@ -666,19 +676,12 @@ export default function TablesIndex({
     const [editSessionError, setEditSessionError] = useState<string | null>(
         null,
     );
+    const [editSessionReason, setEditSessionReason] = useState('');
     const [addItemModalOpen, setAddItemModalOpen] = useState(false);
     const [addItemTableId, setAddItemTableId] = useState<number | null>(null);
     const [addItemSearch, setAddItemSearch] = useState('');
     const [addItemCategory, setAddItemCategory] = useState<string>('all');
-    const [addItemCart, setAddItemCart] = useState<
-        {
-            productId: number;
-            name: string;
-            price: number;
-            quantity: number;
-            category: string;
-        }[]
-    >([]);
+    const [addItemCart, setAddItemCart] = useState<CartItem[]>([]);
     const [addItemSubmitting, setAddItemSubmitting] = useState(false);
     const [moveTabSubmitting, setMoveTabSubmitting] = useState(false);
     const [tabSuccessMessage, setTabSuccessMessage] = useState<string | null>(
@@ -1505,10 +1508,8 @@ export default function TablesIndex({
             return;
         }
 
-        if (!isAdmin && cancelSessionReason.trim() === '') {
-            setCancelSessionError(
-                'Employees must provide a cancellation reason.',
-            );
+        if (cancelSessionReason.trim() === '') {
+            setCancelSessionError('Reason is required to cancel a session.');
 
             return;
         }
@@ -1566,6 +1567,7 @@ export default function TablesIndex({
         );
         setEditSessionRemovedIds([]);
         setEditSessionError(null);
+        setEditSessionReason('');
         setEditSessionItemsOpen(true);
     };
 
@@ -1575,10 +1577,13 @@ export default function TablesIndex({
         setEditSessionDraft([]);
         setEditSessionRemovedIds([]);
         setEditSessionError(null);
+        setEditSessionReason('');
     };
 
     const saveEditSessionItems = async () => {
-        if (editSessionTableId == null) {
+        if (editSessionTableId == null || editSessionReason.trim() === '') {
+            setEditSessionError('Reason is required.');
+
             return;
         }
 
@@ -1599,7 +1604,10 @@ export default function TablesIndex({
                     method: 'PUT',
                     headers: jsonHeaders(),
                     credentials: 'same-origin',
-                    body: JSON.stringify({ items }),
+                    body: JSON.stringify({
+                        items,
+                        reason: editSessionReason.trim(),
+                    }),
                 },
             );
             const data = await res.json().catch(() => ({}));
@@ -1703,15 +1711,7 @@ export default function TablesIndex({
         return matchesSearch && matchesCategory;
     });
 
-    const addProductToCart = (product: {
-        id: number;
-        name: string;
-        price: string;
-        category: string;
-        is_deal?: boolean;
-        deal_active?: boolean;
-        deal_buy_qty?: number | null;
-    }) => {
+    const addProductToCart = (product: Product) => {
         if (product.is_deal && product.deal_active === false) {
             setTabErrorMessage('This Special deal is not active today.');
 
@@ -2337,6 +2337,20 @@ export default function TablesIndex({
                                     {editSessionError}
                                 </p>
                             )}
+                            <div className="space-y-2">
+                                <Label htmlFor="edit-session-reason">
+                                    Reason (required)
+                                </Label>
+                                <textarea
+                                    id="edit-session-reason"
+                                    className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    value={editSessionReason}
+                                    onChange={(event) =>
+                                        setEditSessionReason(event.target.value)
+                                    }
+                                    placeholder="Explain why this correction is needed"
+                                />
+                            </div>
                             <DialogFooter>
                                 <Button
                                     type="button"
@@ -2351,6 +2365,7 @@ export default function TablesIndex({
                                     onClick={saveEditSessionItems}
                                     disabled={
                                         editSessionSaving ||
+                                        editSessionReason.trim() === '' ||
                                         (editSessionDraft.length === 0 &&
                                             editSessionRemovedIds.length === 0)
                                     }
@@ -3139,10 +3154,7 @@ export default function TablesIndex({
                             <div className="space-y-3">
                                 <div className="space-y-2">
                                     <Label htmlFor="cancel-session-reason">
-                                        Reason{' '}
-                                        {isAdmin
-                                            ? '(optional for admin)'
-                                            : '(required)'}
+                                        Reason (required)
                                     </Label>
                                     <textarea
                                         id="cancel-session-reason"
@@ -3154,11 +3166,7 @@ export default function TablesIndex({
                                             );
                                             setCancelSessionError(null);
                                         }}
-                                        placeholder={
-                                            isAdmin
-                                                ? 'Optional note for the daily report'
-                                                : 'Explain why this session is being cancelled'
-                                        }
+                                        placeholder="Explain why this session is being cancelled"
                                     />
                                 </div>
                                 <label className="flex items-start gap-3 rounded-md border border-border/70 bg-muted/30 p-3 text-sm">
@@ -3195,7 +3203,10 @@ export default function TablesIndex({
                                 </AlertDialogCancel>
                                 <AlertDialogAction
                                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                    disabled={cancelSessionSubmitting}
+                                    disabled={
+                                        cancelSessionSubmitting ||
+                                        cancelSessionReason.trim() === ''
+                                    }
                                     onClick={async (e) => {
                                         e.preventDefault();
                                         await confirmCancelSession();

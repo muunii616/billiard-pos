@@ -361,7 +361,7 @@ test('employee cancellation stores the reason and appears in overview', function
         );
 });
 
-test('admin can cancel an active table session without a reason', function () {
+test('admin must provide a reason to cancel an active table session', function () {
     $admin = User::factory()->create(['role' => 'admin']);
     $table = BilliardTable::create([
         'name' => 'Table 6',
@@ -382,12 +382,19 @@ test('admin can cancel an active table session without a reason', function () {
         ->postJson(route('tables.cancel-session', $table), [
             'reason' => '',
         ])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('reason');
+
+    $this->actingAs($admin)
+        ->postJson(route('tables.cancel-session', $table), [
+            'reason' => 'Session was opened by mistake.',
+        ])
         ->assertOk();
 
     $session->refresh();
 
     expect($session->status)->toBe('cancelled')
-        ->and($session->cancel_reason)->toBeNull()
+        ->and($session->cancel_reason)->toBe('Session was opened by mistake.')
         ->and($session->cancelled_by_user_id)->toBe($admin->id);
 });
 
@@ -454,7 +461,9 @@ test('cancel clears an older ghost active session behind a completed one', funct
     ]);
 
     $this->actingAs($admin)
-        ->postJson(route('tables.cancel-session', $table))
+        ->postJson(route('tables.cancel-session', $table), [
+            'reason' => 'Clear abandoned session.',
+        ])
         ->assertOk();
 
     expect($ghost->fresh()->status)->toBe('cancelled')

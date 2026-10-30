@@ -25,6 +25,7 @@ test('admin can correct time blocks on an open tab from edit items', function ()
 
     $this->actingAs($admin)
         ->putJson(route('admin.checkouts.items.update', $checkout), [
+            'reason' => 'Correct recorded table time.',
             'items' => [],
             'time_sessions' => [
                 [
@@ -63,6 +64,7 @@ test('employee cannot edit open tab time blocks', function () {
 
     $this->actingAs($employee)
         ->putJson(route('admin.checkouts.items.update', $checkout), [
+            'reason' => 'Unauthorized correction attempt.',
             'items' => [],
             'time_sessions' => [
                 [

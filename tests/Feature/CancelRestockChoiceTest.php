@@ -40,6 +40,7 @@ test('cancelling a table session can return products to stock', function () {
 
     $this->actingAs($admin)
         ->postJson(route('tables.cancel-session', $table), [
+            'reason' => 'Duplicate session.',
             'restock' => true,
         ])
         ->assertOk();
@@ -80,6 +81,7 @@ test('cancelling a table session can keep products out of stock', function () {
 
     $this->actingAs($admin)
         ->postJson(route('tables.cancel-session', $table), [
+            'reason' => 'Items were consumed.',
             'restock' => false,
         ])
         ->assertOk();
@@ -111,6 +113,7 @@ test('voiding a tab respects the restock choice when reopening', function () {
 
     $this->actingAs($admin)
         ->postJson(route('admin.checkouts.void', $tab), [
+            'reason' => 'Customer cancelled.',
             'restock' => false,
         ])
         ->assertOk();
@@ -119,7 +122,9 @@ test('voiding a tab respects the restock choice when reopening', function () {
         ->and($tab->fresh()->stock_restored)->toBeFalse();
 
     $this->actingAs($admin)
-        ->postJson(route('admin.checkouts.reopen', $tab))
+        ->postJson(route('admin.checkouts.reopen', $tab), [
+            'reason' => 'Correct the tab.',
+        ])
         ->assertOk();
 
     expect($product->fresh()->stock_quantity)->toBe(4)

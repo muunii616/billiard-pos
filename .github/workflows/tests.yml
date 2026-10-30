@@ -71,8 +71,58 @@ jobs:
       - name: Tests
         run: ./vendor/bin/pest
 
+  mariadb:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_DATABASE: billiard_pos_test
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      DB_CONNECTION: mysql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_DATABASE: billiard_pos_test
+      DB_USERNAME: root
+      DB_PASSWORD: root
+      POS_DB_DUMP_BINARY: mariadb-dump
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          tools: composer:v2
+
+      - name: Install MariaDB Client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes mariadb-client
+
+      - name: Install Dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Prepare Application
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: MariaDB Tests
+        run: ./vendor/bin/pest
+
   browser:
-    needs: ci
+    needs: [ci, mariadb]
     runs-on: ubuntu-latest
 
     steps:

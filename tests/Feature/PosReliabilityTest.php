@@ -36,22 +36,22 @@ it('rolls back the entire new tab when any product has insufficient stock', func
 
 it('reopens the same voided tab and reserves stock exactly once', function () {
     $tab = reliabilityTab($this);
-    $this->postJson('/admin/checkouts/'.$tab->id.'/void')->assertOk();
+    $this->postJson('/admin/checkouts/'.$tab->id.'/void', ['reason' => 'Test correction.'])->assertOk();
     expect($this->product->fresh()->stock_quantity)->toBe(10);
-    $this->postJson('/admin/checkouts/'.$tab->id.'/reopen')->assertOk()->assertJsonPath('checkout_id', $tab->id);
-    $this->postJson('/admin/checkouts/'.$tab->id.'/reopen')->assertUnprocessable();
+    $this->postJson('/admin/checkouts/'.$tab->id.'/reopen', ['reason' => 'Test correction.'])->assertOk()->assertJsonPath('checkout_id', $tab->id);
+    $this->postJson('/admin/checkouts/'.$tab->id.'/reopen', ['reason' => 'Test correction.'])->assertUnprocessable();
     expect($this->product->fresh()->stock_quantity)->toBe(8)->and(CheckoutSession::count())->toBe(1);
     $stale = $tab->fresh();
-    $this->postJson('/admin/checkouts/'.$tab->id.'/void')->assertOk();
+    $this->postJson('/admin/checkouts/'.$tab->id.'/void', ['reason' => 'Test correction.'])->assertOk();
     expect(app(CheckoutAdminController::class)->void(Request::create('/', 'POST', []), $stale)->getStatusCode())->toBe(422);
     expect($this->product->fresh()->stock_quantity)->toBe(10);
 });
 
 it('leaves a voided tab unchanged when its stock is no longer available', function () {
     $tab = reliabilityTab($this);
-    $this->postJson('/admin/checkouts/'.$tab->id.'/void')->assertOk();
+    $this->postJson('/admin/checkouts/'.$tab->id.'/void', ['reason' => 'Test correction.'])->assertOk();
     $this->product->update(['stock_quantity' => 1]);
-    $this->postJson('/admin/checkouts/'.$tab->id.'/reopen')->assertUnprocessable();
+    $this->postJson('/admin/checkouts/'.$tab->id.'/reopen', ['reason' => 'Test correction.'])->assertUnprocessable();
     expect($tab->fresh()->status)->toBe('voided')->and($this->product->fresh()->stock_quantity)->toBe(1)->and(CheckoutSession::count())->toBe(1);
 });
 
@@ -59,7 +59,7 @@ it('reopens a completed bill without charging stock twice and replaces its settl
     $tab = reliabilityTab($this);
     $this->postJson('/checkouts/'.$tab->id.'/complete', ['payments' => [['method' => 'cash', 'amount' => 2000]]])->assertOk();
     $original = Receipt::firstOrFail();
-    $this->postJson('/admin/checkouts/'.$tab->id.'/reopen')->assertOk();
+    $this->postJson('/admin/checkouts/'.$tab->id.'/reopen', ['reason' => 'Test correction.'])->assertOk();
     expect($original->fresh()->status)->toBe('voided')->and($this->product->fresh()->stock_quantity)->toBe(8);
     $this->postJson('/checkouts/'.$tab->id.'/complete', ['payments' => [['method' => 'cash', 'amount' => 2000]]])->assertOk();
     expect(Receipt::count())->toBe(2)->and(Receipt::paid()->count())->toBe(1)->and($this->product->fresh()->stock_quantity)->toBe(8);
@@ -71,8 +71,8 @@ it('reserves products from table sessions as well as tab items when reopening', 
     $session = GameSession::create(['billiard_table_id' => $table->id, 'checkout_session_id' => $tab->id, 'user_id' => auth()->id(), 'status' => 'completed', 'started_at' => now()->subHour(), 'ended_at' => now(), 'time_total' => 20000]);
     $session->items()->create(['product_id' => $this->product->id, 'product_name' => 'Cola', 'quantity' => 1, 'unit_price' => 1000, 'total_price' => 1000]);
     $this->product->decrement('stock_quantity');
-    $this->postJson('/admin/checkouts/'.$tab->id.'/void')->assertOk();
-    $this->postJson('/admin/checkouts/'.$tab->id.'/reopen')->assertOk();
+    $this->postJson('/admin/checkouts/'.$tab->id.'/void', ['reason' => 'Test correction.'])->assertOk();
+    $this->postJson('/admin/checkouts/'.$tab->id.'/reopen', ['reason' => 'Test correction.'])->assertOk();
     expect($this->product->fresh()->stock_quantity)->toBe(7)->and($session->fresh()->checkout_session_id)->toBe($tab->id);
 });
 
@@ -103,9 +103,9 @@ it('rolls back payment if saving the receipt snapshot fails', function () {
 
 it('edits existing quantities by stock delta even when addressed by product', function () {
     $tab = reliabilityTab($this);
-    $this->putJson('/admin/checkouts/'.$tab->id.'/items', ['items' => [['product_id' => $this->product->id, 'quantity' => 3]]])->assertOk();
+    $this->putJson('/admin/checkouts/'.$tab->id.'/items', ['reason' => 'Test correction.', 'items' => [['product_id' => $this->product->id, 'quantity' => 3]]])->assertOk();
     expect($this->product->fresh()->stock_quantity)->toBe(7)->and($tab->items()->sum('quantity'))->toEqual(3);
-    $this->putJson('/admin/checkouts/'.$tab->id.'/items', ['items' => [['product_id' => $this->product->id, 'quantity' => 0]]])->assertOk();
+    $this->putJson('/admin/checkouts/'.$tab->id.'/items', ['reason' => 'Test correction.', 'items' => [['product_id' => $this->product->id, 'quantity' => 0]]])->assertOk();
     expect($this->product->fresh()->stock_quantity)->toBe(10)->and($tab->items()->count())->toBe(0);
 });
 
@@ -128,7 +128,7 @@ it('rechecks stale table objects and prevents duplicate active sessions', functi
 it('rejects merges containing closed tabs without moving any items', function () {
     $target = reliabilityTab($this, 1);
     $source = reliabilityTab($this, 1);
-    $this->postJson('/admin/checkouts/'.$source->id.'/void')->assertOk();
+    $this->postJson('/admin/checkouts/'.$source->id.'/void', ['reason' => 'Test correction.'])->assertOk();
     $this->post('/checkouts/merge', ['target_id' => $target->id, 'source_ids' => [$source->id]])->assertSessionHasErrors('merge');
     expect($target->items()->sum('quantity'))->toEqual(1)->and($source->items()->sum('quantity'))->toEqual(1);
 });

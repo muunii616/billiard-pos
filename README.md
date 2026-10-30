@@ -2,6 +2,8 @@
 
 Laravel + Vite (React/TypeScript) point-of-sale system for managing billiard tables, checkouts, and admin workflows.
 
+Store-server deployment and recovery instructions: [docs/store-server.md](docs/store-server.md).
+
 ## Requirements
 
 - PHP 8.4+ and Composer

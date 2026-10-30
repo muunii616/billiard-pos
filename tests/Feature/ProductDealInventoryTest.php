@@ -39,7 +39,10 @@ test('the last deal package can be added through each sales flow', function (str
         if ($flow === 'tab single') {
             $this->postJson(route('checkouts.items.add', $owner), $line)->assertRedirect();
         } else {
-            $this->putJson(route('admin.checkouts.items.update', $owner), ['items' => [$line]])->assertOk();
+            $this->putJson(route('admin.checkouts.items.update', $owner), [
+                'items' => [$line],
+                'reason' => 'Test deal correction.',
+            ])->assertOk();
         }
     }
 
@@ -95,12 +98,14 @@ test('editing deal quantities deducts only the increase and restores removed uni
 
     $this->putJson(route('admin.checkouts.items.update', $checkout), [
         'items' => [['id' => $item->id, 'quantity' => 2]],
+        'reason' => 'Test deal correction.',
     ])->assertOk();
     expect($this->base->fresh()->stock_quantity)->toBe(0)
         ->and((float) $item->fresh()->total_price)->toBe(32000.0);
 
     $this->putJson(route('admin.checkouts.items.update', $checkout), [
         'items' => [['id' => $item->id, 'quantity' => 1]],
+        'reason' => 'Test deal correction.',
     ])->assertOk();
     expect($this->base->fresh()->stock_quantity)->toBe(3)
         ->and((float) $item->fresh()->total_price)->toBe(16000.0);
@@ -120,14 +125,20 @@ test('four beers cannot supply two 2+1 packages in any sales flow', function (st
         $response = match ($flow) {
             'table single' => $this->postJson(route('tables.items.add', $table), $line),
             'table bulk' => $this->postJson(route('tables.items.bulk', $table), ['items' => [$line]]),
-            default => $this->putJson(route('admin.tables.session-items.update', $table), ['items' => [$line]]),
+            default => $this->putJson(route('admin.tables.session-items.update', $table), [
+                'items' => [$line],
+                'reason' => 'Test deal correction.',
+            ]),
         };
     } else {
         $owner = CheckoutSession::create(['status' => CheckoutSession::STATUS_OPEN]);
         $response = match ($flow) {
             'tab single' => $this->postJson(route('checkouts.items.add', $owner), $line),
             'tab bulk' => $this->postJson(route('checkouts.items.bulk', $owner), ['items' => [$line]]),
-            default => $this->putJson(route('admin.checkouts.items.update', $owner), ['items' => [$line]]),
+            default => $this->putJson(route('admin.checkouts.items.update', $owner), [
+                'items' => [$line],
+                'reason' => 'Test deal correction.',
+            ]),
         };
     }
 

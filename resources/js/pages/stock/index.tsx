@@ -188,6 +188,8 @@ export default function StockIndex({
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [message, setMessage] = useState<string | null>(null);
+    const [adjustmentOpen, setAdjustmentOpen] = useState(false);
+    const [adjustmentReason, setAdjustmentReason] = useState('');
 
     const [externalOpen, setExternalOpen] = useState(false);
     const [externalUserId, setExternalUserId] = useState(
@@ -311,16 +313,24 @@ export default function StockIndex({
             return;
         }
 
+        if (adjustmentReason.trim() === '') {
+            setError('Reason is required.');
+
+            return;
+        }
+
         setSaving(true);
         setError(null);
         setMessage(null);
         router.post(
             '/admin/products/stock',
-            { items: pendingItems },
+            { items: pendingItems, reason: adjustmentReason.trim() },
             {
                 preserveScroll: true,
                 onSuccess: () => {
                     setDraftChanges({});
+                    setAdjustmentOpen(false);
+                    setAdjustmentReason('');
                     setMessage('Stock updated.');
                 },
                 onError: (errors) => {
@@ -351,13 +361,19 @@ export default function StockIndex({
             return;
         }
 
+        if (externalNote.trim() === '') {
+            setExternalError('Reason is required.');
+
+            return;
+        }
+
         setExternalSaving(true);
         router.post(
             '/admin/products/external-use',
             {
                 user_id: userId,
                 items: [{ product_id: productId, quantity }],
-                note: externalNote.trim() || null,
+                note: externalNote.trim(),
             },
             {
                 preserveScroll: true,
@@ -412,7 +428,11 @@ export default function StockIndex({
                     <Button
                         type="button"
                         disabled={saving || pendingItems.length === 0}
-                        onClick={saveAdjustments}
+                        onClick={() => {
+                            setError(null);
+                            setAdjustmentReason('');
+                            setAdjustmentOpen(true);
+                        }}
                     >
                         {saving
                             ? t('Saving…')
@@ -428,6 +448,62 @@ export default function StockIndex({
                               : t('Save changes')}
                     </Button>
                 </PageHeader>
+
+                <Dialog
+                    open={adjustmentOpen}
+                    onOpenChange={(open) => !saving && setAdjustmentOpen(open)}
+                >
+                    <DialogContent className="sm:max-w-md">
+                        <DialogHeader>
+                            <DialogTitle>{t('Save stock changes')}</DialogTitle>
+                            <DialogDescription>
+                                {t(
+                                    'Record why this stock correction is needed.',
+                                )}
+                            </DialogDescription>
+                        </DialogHeader>
+                        <div className="space-y-2">
+                            <Label htmlFor="stock-adjustment-reason">
+                                {t('Reason')} {t('(required)')}
+                            </Label>
+                            <Input
+                                id="stock-adjustment-reason"
+                                value={adjustmentReason}
+                                onChange={(event) => {
+                                    setAdjustmentReason(event.target.value);
+                                    setError(null);
+                                }}
+                                placeholder={t(
+                                    'Delivery, count correction, damage…',
+                                )}
+                            />
+                            {error && (
+                                <p className="text-sm text-destructive">
+                                    {t(error)}
+                                </p>
+                            )}
+                        </div>
+                        <DialogFooter>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => setAdjustmentOpen(false)}
+                                disabled={saving}
+                            >
+                                {t('Cancel')}
+                            </Button>
+                            <Button
+                                type="button"
+                                onClick={saveAdjustments}
+                                disabled={
+                                    saving || adjustmentReason.trim() === ''
+                                }
+                            >
+                                {saving ? t('Saving…') : t('Save changes')}
+                            </Button>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
 
                 <Dialog
                     open={downloadOpen}
@@ -1060,7 +1136,9 @@ export default function StockIndex({
                             />
                         </div>
                         <div className="space-y-1.5">
-                            <Label>{t('Note (optional)')}</Label>
+                            <Label>
+                                {t('Reason')} {t('(required)')}
+                            </Label>
                             <Input
                                 value={externalNote}
                                 onChange={(event) =>
@@ -1087,7 +1165,9 @@ export default function StockIndex({
                         <Button
                             type="button"
                             onClick={submitExternalUse}
-                            disabled={externalSaving}
+                            disabled={
+                                externalSaving || externalNote.trim() === ''
+                            }
                         >
                             {externalSaving ? t('Saving…') : t('Record use')}
                         </Button>

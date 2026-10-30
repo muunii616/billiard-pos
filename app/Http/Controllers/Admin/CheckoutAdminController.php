@@ -25,6 +25,7 @@ class CheckoutAdminController extends Controller
             }
 
             $data = $request->validate(array_merge(PosItemEditor::rules(), [
+                'reason' => ['required', 'string', 'max:2000'],
                 'time_sessions' => ['sometimes', 'array'],
                 'time_sessions.*.id' => ['required', 'integer', 'distinct'],
                 'time_sessions.*.time_blocks' => ['required', 'array'],
@@ -82,9 +83,8 @@ class CheckoutAdminController extends Controller
                 ], 422);
             }
 
-            $isAdmin = $request->user()?->role === 'admin';
             $data = $request->validate([
-                'reason' => [$isAdmin ? 'nullable' : 'required', 'string', 'max:2000'],
+                'reason' => ['required', 'string', 'max:2000'],
                 'restock' => ['sometimes', 'boolean'],
             ]);
             $reason = trim((string) ($data['reason'] ?? ''));
@@ -118,9 +118,11 @@ class CheckoutAdminController extends Controller
         });
     }
 
-    public function reopen(CheckoutSession $checkout)
+    public function reopen(Request $request, CheckoutSession $checkout)
     {
-        return PosTransaction::checkout($checkout, function (CheckoutSession $checkout) {
+        return PosTransaction::checkout($checkout, function (CheckoutSession $checkout) use ($request) {
+            $request->validate(['reason' => ['required', 'string', 'max:2000']]);
+
             if (! in_array($checkout->status, ['completed', 'voided'], true)) {
                 return response()->json(['message' => 'Only completed or voided tabs can be reopened.'], 422);
             }

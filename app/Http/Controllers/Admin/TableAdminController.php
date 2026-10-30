@@ -20,9 +20,8 @@ class TableAdminController extends Controller
                 return response()->json(['message' => 'No active session to cancel.'], 422);
             }
 
-            $isAdmin = $request->user()?->role === 'admin';
             $data = $request->validate([
-                'reason' => [$isAdmin ? 'nullable' : 'required', 'string', 'max:2000'],
+                'reason' => ['required', 'string', 'max:2000'],
                 'restock' => ['sometimes', 'boolean'],
             ]);
             $reason = trim((string) ($data['reason'] ?? ''));
@@ -90,6 +89,7 @@ class TableAdminController extends Controller
 
             $data = $request->validate(array_merge(PosItemEditor::rules(), [
                 'items' => ['required', 'array'],
+                'reason' => ['required', 'string', 'max:2000'],
             ]));
             PosItemEditor::update($session, $data['items']);
 

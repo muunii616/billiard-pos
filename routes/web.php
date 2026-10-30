@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Admin\AuditLogController;
 use App\Http\Controllers\Admin\BilliardTableController;
 use App\Http\Controllers\Admin\CashSessionAdminController;
 use App\Http\Controllers\Admin\CheckoutAdminController;
@@ -9,6 +10,7 @@ use App\Http\Controllers\Admin\TableAdminController;
 use App\Http\Controllers\Admin\UserController as AdminUserController;
 use App\Http\Controllers\CheckoutSessionController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\HealthController;
 use App\Http\Controllers\OverviewController;
 use App\Http\Controllers\ReceiptController;
 use App\Http\Controllers\RegisterController;
@@ -16,6 +18,7 @@ use App\Http\Controllers\StockController;
 use App\Http\Controllers\TableController;
 use Illuminate\Support\Facades\Route;
 
+Route::get('up', HealthController::class)->middleware('health.token')->name('health');
 Route::inertia('/', 'welcome')->name('home');
 
 Route::middleware(['auth', 'verified'])->group(function () {
@@ -27,8 +30,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('admin/products', [AdminProductController::class, 'index'])->name('admin.products.index');
     Route::get('stock', [StockController::class, 'index'])->name('stock.index');
     Route::get('stock/download', [StockController::class, 'download'])->name('stock.download');
-    Route::post('admin/products/stock', [AdminProductController::class, 'adjustStock'])->name('admin.products.stock');
-    Route::post('admin/products/external-use', [AdminProductController::class, 'recordExternalUse'])->name('admin.products.external-use');
+    Route::post('admin/products/stock', [AdminProductController::class, 'adjustStock'])->middleware('audit')->name('admin.products.stock');
+    Route::post('admin/products/external-use', [AdminProductController::class, 'recordExternalUse'])->middleware('audit')->name('admin.products.external-use');
 
     Route::get('tables', [TableController::class, 'index'])->name('tables.index');
     Route::post('tables/{table}/start', [TableController::class, 'start'])->name('tables.start');
@@ -43,7 +46,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('tables/{table}/move-to-checkout', [TableController::class, 'moveToCheckout'])->name('tables.move-to-checkout');
     Route::post('tables/{table}/items', [TableController::class, 'addItem'])->name('tables.items.add');
     Route::post('tables/{table}/items/bulk', [TableController::class, 'addItemsBulk'])->name('tables.items.bulk');
-    Route::post('tables/{table}/cancel-session', [TableAdminController::class, 'cancelSession'])->name('tables.cancel-session');
+    Route::post('tables/{table}/cancel-session', [TableAdminController::class, 'cancelSession'])->middleware('audit')->name('tables.cancel-session');
     Route::get('checkouts', [CheckoutSessionController::class, 'index'])->name('checkouts.index');
     Route::get('checkouts/options', [CheckoutSessionController::class, 'options'])->name('checkouts.options');
     Route::post('checkouts/from-products', [CheckoutSessionController::class, 'createFromProducts'])->name('checkouts.from-products');
@@ -52,18 +55,19 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('checkouts/{checkout}/items/bulk', [CheckoutSessionController::class, 'addItemsBulk'])->name('checkouts.items.bulk');
     Route::post('checkouts/{checkout}/complete', [CheckoutSessionController::class, 'complete'])->name('checkouts.complete');
     Route::post('checkouts/merge', [CheckoutSessionController::class, 'merge'])->name('checkouts.merge');
-    Route::post('admin/checkouts/{checkout}/void', [CheckoutAdminController::class, 'void'])->name('admin.checkouts.void');
+    Route::post('admin/checkouts/{checkout}/void', [CheckoutAdminController::class, 'void'])->middleware('audit')->name('admin.checkouts.void');
     Route::post('receipts/{receipt}/send-email', [ReceiptController::class, 'sendEmail'])->name('receipts.send-email');
     Route::get('admin/receipts/{receipt}', [ReceiptAdminController::class, 'show'])->name('admin.receipts.show');
     Route::get('admin/cash/current', [CashSessionAdminController::class, 'current'])->name('admin.cash.current');
-    Route::post('admin/cash/open', [CashSessionAdminController::class, 'open'])->name('admin.cash.open');
-    Route::post('admin/cash/close', [CashSessionAdminController::class, 'close'])->name('admin.cash.close');
-    Route::post('admin/cash/continue', [CashSessionAdminController::class, 'continueShift'])->name('admin.cash.continue');
-    Route::post('admin/cash/handover', [CashSessionAdminController::class, 'handover'])->name('admin.cash.handover');
+    Route::post('admin/cash/open', [CashSessionAdminController::class, 'open'])->middleware('audit')->name('admin.cash.open');
+    Route::post('admin/cash/close', [CashSessionAdminController::class, 'close'])->middleware('audit')->name('admin.cash.close');
+    Route::post('admin/cash/continue', [CashSessionAdminController::class, 'continueShift'])->middleware('audit')->name('admin.cash.continue');
+    Route::post('admin/cash/handover', [CashSessionAdminController::class, 'handover'])->middleware('audit')->name('admin.cash.handover');
     Route::get('admin/cash/{cashSession}/receipt', [CashSessionAdminController::class, 'receipt'])->name('admin.cash.receipt');
 
     // Admin-only routes will use the "role:admin" middleware.
-    Route::middleware('role:admin')->group(function () {
+    Route::middleware(['role:admin', 'audit'])->group(function () {
+        Route::get('admin/audit-logs', AuditLogController::class)->name('admin.audit-logs.index');
         Route::post('admin/products', [AdminProductController::class, 'store'])->name('admin.products.store');
         Route::put('admin/products/{product}', [AdminProductController::class, 'update'])->name('admin.products.update');
         Route::delete('admin/products/{product}', [AdminProductController::class, 'destroy'])->name('admin.products.destroy');
@@ -84,7 +88,6 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
         Route::put('admin/receipts/{receipt}', [ReceiptAdminController::class, 'update'])->name('admin.receipts.update');
         Route::post('admin/receipts/{receipt}/void', [ReceiptAdminController::class, 'void'])->name('admin.receipts.void');
-        Route::delete('admin/receipts/{receipt}', [ReceiptAdminController::class, 'destroy'])->name('admin.receipts.destroy');
         Route::get('admin/overview/export/csv', [ReceiptAdminController::class, 'exportCsv'])->name('admin.overview.export.csv');
 
         Route::put('admin/tables/{table}/session-items', [TableAdminController::class, 'updateSessionItems'])->name('admin.tables.session-items.update');

@@ -96,6 +96,21 @@ type CartItem = {
     quantity: number;
 };
 
+const PRODUCT_FORM_DEFAULTS = {
+    name: '',
+    category: '',
+    price: '',
+    cost_price: '',
+    stock_quantity: '0',
+    low_stock_threshold: '5',
+    is_deal: false,
+    deal_product_id: '',
+    deal_buy_qty: '1',
+    deal_get_qty: '1',
+    deal_starts_on: '',
+    deal_ends_on: '',
+};
+
 export default function AdminProducts({
     products,
     dealBaseProducts = [],
@@ -139,35 +154,12 @@ export default function AdminProducts({
 
     const { data, setData, post, reset, processing, errors, transform } =
         useForm({
-            name: '',
+            ...PRODUCT_FORM_DEFAULTS,
             category: 'Snacks',
-            price: '',
-            cost_price: '',
-            stock_quantity: '0',
-            low_stock_threshold: '5',
-            is_deal: false as boolean,
-            deal_product_id: '' as string,
             deal_product_ids: [] as string[],
-            deal_buy_qty: '1',
-            deal_get_qty: '1',
-            deal_starts_on: '',
-            deal_ends_on: '',
         });
 
-    const editForm = useForm({
-        name: '',
-        category: '',
-        price: '',
-        cost_price: '',
-        stock_quantity: '0',
-        low_stock_threshold: '5',
-        is_deal: false as boolean,
-        deal_product_id: '' as string,
-        deal_buy_qty: '1',
-        deal_get_qty: '1',
-        deal_starts_on: '',
-        deal_ends_on: '',
-    });
+    const editForm = useForm(PRODUCT_FORM_DEFAULTS);
 
     const [createOpen, setCreateOpen] = useState(false);
     const [editProduct, setEditProduct] = useState<Product | null>(null);
@@ -407,68 +399,60 @@ export default function AdminProducts({
         }
     };
 
-    const handleAddToExistingTab = async () => {
+    const addCartTo = async (
+        destination: 'tab' | 'table',
+        destinationId: number | null,
+    ) => {
         if (!validateCart()) {
             return;
         }
 
-        if (!selectedCheckoutId) {
-            setPosError('Select an open tab first.');
+        if (!destinationId) {
+            setPosError(
+                destination === 'tab'
+                    ? 'Select an open tab first.'
+                    : 'Select a running table first.',
+            );
 
             return;
         }
 
-        const checkoutId = selectedCheckoutId;
-        setExistingTabOpen(false);
-        const result = await inertiaPost(
-            `/checkouts/${checkoutId}/items/bulk`,
-            { items: posItemsPayload() },
+        if (destination === 'tab') {
+            setExistingTabOpen(false);
+        } else {
+            setRunningTableOpen(false);
+        }
+
+        const url =
+            destination === 'tab'
+                ? `/checkouts/${destinationId}/items/bulk`
+                : `/tables/${destinationId}/items/bulk`;
+        const result = await inertiaPost(url, { items: posItemsPayload() });
+
+        if (result !== 'success') {
+            if (result === 'error') {
+                setPosError(
+                    destination === 'tab'
+                        ? 'Failed to add items to tab. Refreshing…'
+                        : 'Failed to add items to table. Refreshing…',
+                );
+            }
+
+            router.reload();
+
+            return;
+        }
+
+        setPosMessage(
+            destination === 'tab'
+                ? `Added items to Tab #${destinationId}.`
+                : 'Added items to running table session.',
         );
-
-        if (result !== 'success') {
-            if (result === 'error') {
-                setPosError('Failed to add items to tab. Refreshing…');
-            }
-
-            router.reload();
-
-            return;
-        }
-
-        setPosMessage(`Added items to Tab #${checkoutId}.`);
         setCart([]);
     };
 
-    const handleAddToRunningTable = async () => {
-        if (!validateCart()) {
-            return;
-        }
-
-        if (!selectedTableId) {
-            setPosError('Select a running table first.');
-
-            return;
-        }
-
-        const tableId = selectedTableId;
-        setRunningTableOpen(false);
-        const result = await inertiaPost(`/tables/${tableId}/items/bulk`, {
-            items: posItemsPayload(),
-        });
-
-        if (result !== 'success') {
-            if (result === 'error') {
-                setPosError('Failed to add items to table. Refreshing…');
-            }
-
-            router.reload();
-
-            return;
-        }
-
-        setPosMessage('Added items to running table session.');
-        setCart([]);
-    };
+    const handleAddToExistingTab = () => addCartTo('tab', selectedCheckoutId);
+    const handleAddToRunningTable = () => addCartTo('table', selectedTableId);
 
     const handleActionPayNow = () => {
         if (!validateCart()) {
@@ -532,6 +516,12 @@ export default function AdminProducts({
             return;
         }
 
+        if (externalNote.trim() === '') {
+            setExternalError('Reason is required.');
+
+            return;
+        }
+
         setExternalSaving(true);
         setExternalError(null);
         router.post(
@@ -539,7 +529,7 @@ export default function AdminProducts({
             {
                 user_id: userId,
                 items: posItemsPayload(),
-                note: externalNote.trim() || null,
+                note: externalNote.trim(),
             },
             {
                 preserveScroll: true,
@@ -1389,7 +1379,7 @@ export default function AdminProducts({
                         </div>
                         <div className="space-y-1.5">
                             <p className="text-xs font-medium text-muted-foreground">
-                                Note (optional)
+                                Reason (required)
                             </p>
                             <Input
                                 value={externalNote}
@@ -1417,7 +1407,11 @@ export default function AdminProducts({
                         <Button
                             type="button"
                             onClick={handleConfirmExternalUse}
-                            disabled={externalSaving || !externalUserId}
+                            disabled={
+                                externalSaving ||
+                                !externalUserId ||
+                                externalNote.trim() === ''
+                            }
                         >
                             {externalSaving
                                 ? 'Recording…'
